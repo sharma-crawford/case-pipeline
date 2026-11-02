@@ -14,7 +14,7 @@ import Database from "better-sqlite3";
 import { initializeSchema } from "@case-pipeline/seed/db/schema";
 
 type Call = { op: string; [k: string]: unknown };
-const state = vi.hoisted(() => ({ calls: [] as Call[], slack: [] as [string, string][], moveFails: false }));
+const state = vi.hoisted(() => ({ calls: [] as Call[], slack: [] as [string, string][], moveFails: false, timelineFails: false }));
 
 vi.mock("../db/users-db.js", async () => {
   const Db = (await import("better-sqlite3")).default;
@@ -47,6 +47,11 @@ vi.mock("../notify/slack.js", async (orig) => ({
 vi.mock("../data-source/index.js", () => ({
   dataSource: {
     postUpdate: async (itemId: string, body: string) => { state.calls.push({ op: "update", itemId, body }); return "u1"; },
+    createTimelineItem: async (input: Record<string, unknown>) => {
+      if (state.timelineFails) throw new Error("Monday down");
+      state.calls.push({ op: "timeline", ...input });
+      return "t1";
+    },
     setColumnValues: async (boardId: string, itemId: string, values: Record<string, unknown>) => { state.calls.push({ op: "columns", boardId, itemId, values }); },
     moveItem: async (boardId: string, groupId: string, itemId: string) => {
       if (state.moveFails) throw new Error("Monday down");
@@ -72,6 +77,7 @@ beforeEach(() => {
   state.calls = [];
   state.slack = [];
   state.moveFails = false;
+  state.timelineFails = false;
   usersDb.exec("DELETE FROM payment_links; DELETE FROM lawpay_events;");
   db = new Database(":memory:");
   initializeSchema(db);
@@ -133,6 +139,25 @@ describe("LawPay payments", () => {
     expect(state.calls).toEqual([]);
     // The same e-mail seen again by the next run: skipped before anything.
     expect(await pay(FF, 121025, "t2", { messageId: "msg-2" })).toBeUndefined();
+  });
+
+  it("the note also goes on the client's Profile: its Updates and an E&A Contract note", async () => {
+    await pay(AF, 412000, "p1");
+    const updates = state.calls.filter((c) => c.op === "update");
+    expect(updates.map((c) => c.itemId)).toEqual(["555", "111"]);
+    expect(String(updates[1]!.body)).toContain("LawPay payment received: Attorney fee $4,120.00");
+    expect(String(updates[1]!.body)).toContain("Fee K: I-212.");
+    expect(state.calls.find((c) => c.op === "timeline")).toMatchObject({
+      itemId: "111", customActivityId: "89e0ea14-1f47-45ba-81ab-1f276b958f9c",
+      title: "💵 Payment received — Attorney fee $4,120.00",
+    });
+  });
+
+  it("the Profile's E&A entry is queued when Monday refuses it", async () => {
+    state.timelineFails = true;
+    await pay(AF, 412000, "p2");
+    const q = db.prepare("SELECT op_type AS op, target_table AS t, monday_item_id AS id FROM write_queue").all();
+    expect(q).toEqual([{ op: "create_timeline_item", t: "profiles", id: "111" }]);
   });
 
   it("links made by hand: matched by the client's name anywhere in the reference", async () => {

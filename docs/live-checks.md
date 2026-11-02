@@ -23,7 +23,7 @@ Last reviewed: 2026-10-29.
 |---|---|---|---|
 | ☐ | Adobe Sign send (#125, #135, #143) | Zaps 2–3 built in Zapier, plus Zap 3's "Find Form Field Data" step | Send a test contract to yourself as client: stage moves on each signature, the signed copy lands in E-File → `FEE Ks` |
 | ☐ | Buzón automatic texts (`BUZON_AUTO`) | An attorney reviews the document lists, staff check the Spanish, an admin saves Settings → Firm → Fee K Types + consult lists | Set `BUZON_AUTO=on` and `BUZON_AUTO_SINCE=<today>` |
-| ☐ | LawPay on an app-made link | A real client paying a link M21 created (the reference carries the Fee K code) | The Fee K gets the note + bell, and moves to Paid Fee Ks if fully paid |
+| ☐ | LawPay on an app-made link | A real client paying a link M21 created (the reference carries the Fee K code) | The Fee K gets the note + bell, the Profile gets it in Updates + E&A, and it moves to Paid Fee Ks if fully paid |
 | ☐ | LawPay e-mail fallback (`LAWPAY_MAIL`) | Microsoft admin consent for Mail.Read | `npm run lawpay:mail -- --login`, then turn it on |
 | ☐ | SMS at scale | A2P 10DLC registration for the firm's number | Nothing to switch; texts stop being filtered by carriers |
 

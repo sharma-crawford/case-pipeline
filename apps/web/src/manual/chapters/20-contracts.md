@@ -6,7 +6,7 @@ summary: From a new Fee K to a signed, paid contract — generate, sign, send pa
 routes: contracts
 code: P14
 for: billing, attorney
-updated: 2026-10-29
+updated: 2026-11-02
 ---
 
 **Contracts** lists every pending Fee K, grouped by **Contract Stage** in its Monday colour. The colour of the age shows how long it has waited (30 and 60 days). Click an attorney to see only theirs. **Missing info** at the top shows contracts that lack a case type, AF, attorney, e-mail or address.
@@ -62,7 +62,7 @@ Either:
 3. **Text links to client** (or e-mail them, bilingual). Credit card adds 3% per link.
 4. **Mark sent** sets *Payment Link Sent On*. A live text marks it sent for you.
 
-When the client pays, the app reads LawPay's receipt, adds a note to the Fee K, tells whoever sent the links, and — when every fee is paid — moves it to **Paid Fee Ks** with stage *Paid needs action*.
+When the client pays, the app reads LawPay's receipt, adds a note to the Fee K and to the client's Profile (its **Updates** and **Emails & Activities**), tells whoever sent the links, and — when every fee is paid — moves it to **Paid Fee Ks** with stage *Paid needs action*.
 
 ### Split a payment
 

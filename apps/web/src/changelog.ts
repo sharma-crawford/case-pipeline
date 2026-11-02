@@ -14,6 +14,13 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    date: "2026-11-02",
+    title: "LawPay payments show on the client's Profile",
+    items: [
+      "When a client pays a LawPay link, the payment note now also appears on their Profile: in Updates and in Emails & Activities. Until now it was only on the Fee K.",
+    ],
+  },
+  {
     date: "2026-10-29",
     title: "Contract file names start with the date",
     items: [
