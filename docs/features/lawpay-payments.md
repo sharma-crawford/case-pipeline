@@ -24,6 +24,9 @@ still applied once.
 For every payment receipt whose reference is one of ours:
 
 1. **A note on the Fee K**: "💵 LawPay payment received: Attorney fee $4,120.00 (visa). Reference: …".
+   The same note (plus "Fee K: <case type>") goes on the **client's Profile**,
+   in its Updates and as an E&A **Contract note** entry, since staff read a
+   client's history there (2026-11-02). Each write is queued on an outage.
 2. **A Monday notification** to whoever handed out the links in M21 (e-mailed,
    texted, copied or marked sent).
 3. **Slack**, event "Payment received" (Settings → Integrations).

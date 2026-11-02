@@ -48,6 +48,7 @@ import { createNotification, fetchBoardStructure } from "@case-pipeline/monday";
 import { notifyEvent, slackEscape, withLink } from "../notify/slack.js";
 import { makeMondayUserByLogin } from "../contract-info.js";
 import { buzonFeeKPaid } from "../buzon/job.js";
+import { CONTRACT_NOTE_ACTIVITY_ID } from "./profile-write.js";
 import {
   FEE_WORDS, feeKIdFromReference, isFullyPaid, normalizeReference, paidFees, parseReference, partsLeft, personName,
   type FeeType, type IssuedLink, type LawPayPayment,
@@ -67,6 +68,8 @@ const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" 
 interface FeeKRow {
   localId: string;
   mondayId: string | null;
+  profileLocalId: string | null;
+  profileMondayId: string | null;
   clientName: string;
   stage: string | null;
   group: string | null;
@@ -84,6 +87,7 @@ const amountOf = (v: unknown) => {
 function feeK(db: DatabaseInstance, where: string, arg: string): FeeKRow | undefined {
   return db.prepare(`
     SELECT c.local_id AS localId, c.monday_item_id AS mondayId, COALESCE(p.name, c.name) AS clientName,
+           p.local_id AS profileLocalId, p.monday_item_id AS profileMondayId,
            json_extract(c.raw_column_values, '$.contract_stage.label') AS stage, c.group_title AS "group",
            ${feeKCaseTypeSql()} AS contractFor,
            json_extract(c.raw_column_values, '$.af') AS af, json_extract(c.raw_column_values, '$.ff') AS ff,
@@ -241,17 +245,37 @@ export async function applyLawPayEvent(deps: LawPayDeps, eventId: number, paymen
     lines.push(movedNote);
   }
 
-  if (row.mondayId) {
-    const body = lines.join("\n");
+  const types = (() => { try { return (JSON.parse(row.contractFor ?? "[]") as string[]).join(", "); } catch { return ""; } })();
+  const body = lines.join("\n");
+  // The Fee K's Updates, and the client's Profile — Updates and an E&A "Contract
+  // note" — since staff read a client's history on the Profile.
+  const profileBody = types ? `${body}\nFee K: ${types}.` : body;
+  const write = async (what: string, run: () => Promise<unknown>, queued: Parameters<typeof enqueueWrite>[1]) => {
     try {
-      await dataSource.postUpdate(row.mondayId, body, token);
+      await run();
     } catch (err) {
-      console.error("[lawpay] note failed; queueing:", err);
-      enqueueWrite(db, { opType: "create_update", targetTable: "contracts", targetLocalId: row.localId, mondayItemId: row.mondayId, authorOid: null, payload: { body } });
+      console.error(`[lawpay] ${what} failed; queueing:`, err);
+      enqueueWrite(db, queued);
     }
+  };
+  if (row.mondayId) {
+    const itemId = row.mondayId;
+    await write("Fee K note", () => dataSource.postUpdate(itemId, body, token),
+      { opType: "create_update", targetTable: "contracts", targetLocalId: row.localId, mondayItemId: itemId, authorOid: null, payload: { body } });
+  }
+  if (row.profileMondayId) {
+    const itemId = row.profileMondayId;
+    const target = { targetTable: "profiles", targetLocalId: row.profileLocalId, mondayItemId: itemId, authorOid: null } as const;
+    await write("profile note", () => dataSource.postUpdate(itemId, profileBody, token),
+      { ...target, opType: "create_update", payload: { body: profileBody } });
+    const entry = {
+      itemId, customActivityId: CONTRACT_NOTE_ACTIVITY_ID, content: profileBody,
+      title: `💵 Payment received — ${FEE_WORDS[ref.fee]}${partWords} ${usd.format(payment.amount)}`,
+    };
+    await write("profile E&A entry", () => dataSource.createTimelineItem(entry, token),
+      { ...target, opType: "create_timeline_item", payload: { ...entry } });
   }
 
-  const types = (() => { try { return (JSON.parse(row.contractFor ?? "[]") as string[]).join(", "); } catch { return ""; } })();
   const link2 = boardId && row.mondayId ? `${MONDAY_ACCOUNT_URL}/boards/${boardId}/pulses/${row.mondayId}` : null;
   await notifyEvent("payment_received", withLink(
     `:moneybag: *${slackEscape(row.clientName)}* paid ${FEE_WORDS[ref.fee].toLowerCase()}${partWords} ${usd.format(payment.amount)}${types ? ` (${slackEscape(types)})` : ""}` +
