@@ -22,6 +22,14 @@ export const CHANGELOG: ChangelogEntry[] = [
     ],
   },
   {
+    date: "2026-11-03",
+    title: "Send a contract on a later date",
+    items: [
+      "In Generate contract, after Preview PDF, the new Send on scheduled date button keeps the contract and sends it to Adobe Sign by itself on the Fee K's Send Fee K By date. The stage shows SCHEDULED - fee k to be sent until then.",
+      "If Send Fee K On moves in Calendaring, it goes out on the new date. Cancel scheduled send (in Generate contract) or moving the stage off SCHEDULED stops it.",
+    ],
+  },
+  {
     date: "2026-11-02",
     title: "LawPay payments show on the client's Profile",
     items: [

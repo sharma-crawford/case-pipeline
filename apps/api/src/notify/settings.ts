@@ -46,6 +46,7 @@ export const NOTIFY_EVENTS = [
   { key: "ops_drive_intake", kind: "ops", label: "Drive intake failed", description: "Copying client uploads from Google Drive failed" },
   { key: "ops_client_uploads", kind: "ops", label: "Client uploads stuck", description: "Filing client uploads failed, or a client's files have had nowhere to go for a day" },
   { key: "ops_fee_k_autofill", kind: "ops", label: "Fee K auto-fill failed", description: "The Fee K auto-fill run failed" },
+  { key: "ops_esign_scheduled", kind: "ops", label: "Scheduled contract send failed", description: "A contract scheduled for a later date could not be sent to Adobe Sign" },
   { key: "ops_lawpay_mail", kind: "ops", label: "LawPay payments failed", description: "Reading LawPay payments (Slack #payments or the receipts inbox) failed" },
   { key: "ops_backup", kind: "ops", label: "Backup failed", description: "The daily database backup failed" },
 ] as const satisfies readonly NotifyEventDef[];

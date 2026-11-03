@@ -17,6 +17,7 @@
 import type { ContractStep } from "@case-pipeline/query";
 
 export type EsignStatus =
+  | "scheduled" | "canceled"
   | "sending" | "out_for_signature" | "attorney_signed" | "signed"
   | "rejected" | "expired" | "recalled" | "send_failed";
 

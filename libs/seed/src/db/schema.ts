@@ -5,7 +5,7 @@
 import type BetterSqlite3 from "better-sqlite3";
 type Database = BetterSqlite3.Database;
 
-export const SCHEMA_VERSION = 39;
+export const SCHEMA_VERSION = 40;
 
 /**
  * The Buzón's automatic side (v39, docs/features/buzon.md). Shared by a fresh
@@ -583,17 +583,29 @@ CREATE TABLE IF NOT EXISTS esign_agreements (
     attorney_email         TEXT NOT NULL,
     agreement_id           TEXT UNIQUE,            -- Adobe's, posted back by Zap 1
     file_token             TEXT NOT NULL UNIQUE,   -- the PDF's private link
-    status                 TEXT NOT NULL,          -- sending | out_for_signature | attorney_signed | signed | rejected | expired | recalled | send_failed
+    status                 TEXT NOT NULL,          -- scheduled | canceled | sending | out_for_signature | attorney_signed | signed | rejected | expired | recalled | send_failed
     sent_by_oid            TEXT,
     sent_by_name           TEXT,
     sent_by_monday_id      TEXT,                   -- who gets the Monday notifications
     last_event             TEXT,
     last_error             TEXT,
     signed_pdf_at          TEXT,
+    document_name          TEXT,                   -- v40: M22's file name, kept for a scheduled send
+    send_on                TEXT,                   -- v40: scheduled: the Fee K's "Send Fee K By:" date when it was scheduled
+    sent_at                TEXT,                   -- v40: when Zap 1 got it (the file link's 3 days run from here)
     created_at             TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at             TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_esign_agreements_contract ON esign_agreements(contract_monday_id);
+
+-- Scheduled-send reminders (v40): a SCHEDULED Fee K whose "Send Fee K By:"
+-- date came with no contract prepared in M22 gets one note per date.
+CREATE TABLE IF NOT EXISTS esign_schedule_reminders (
+    contract_monday_id     TEXT NOT NULL,
+    send_on                TEXT NOT NULL,
+    created_at             TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (contract_monday_id, send_on)
+);
 
 -- Client upload links (v37): a private link per client to send us documents,
 -- which the filing job puts in their E-File's CAF folder. Local-only — NOT
@@ -1897,6 +1909,23 @@ export function initializeSchema(db: Database): void {
       addColumn("upload_checklist_items", "appointment_monday_id", "TEXT");
       addColumn("upload_checklist_items", "consult_list", "TEXT");
       db.exec("CREATE INDEX IF NOT EXISTS idx_upload_checklist_appointment ON upload_checklist_items(appointment_monday_id)");
+    }
+
+    // Migration v39 → v40: scheduled Adobe Sign sends. esign_agreements columns + reminders table.
+    if (fromVersion < 40) {
+      const hasTable = db.prepare("SELECT COUNT(*) AS cnt FROM sqlite_master WHERE type = 'table' AND name = 'esign_agreements'").get() as { cnt: number };
+      for (const column of hasTable.cnt ? ["document_name", "send_on", "sent_at"] : []) {
+        const has = db.prepare("SELECT COUNT(*) AS cnt FROM pragma_table_info('esign_agreements') WHERE name = ?").get(column) as { cnt: number };
+        if (!has.cnt) db.exec(`ALTER TABLE esign_agreements ADD COLUMN ${column} TEXT`);
+      }
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS esign_schedule_reminders (
+            contract_monday_id     TEXT NOT NULL,
+            send_on                TEXT NOT NULL,
+            created_at             TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (contract_monday_id, send_on)
+        );
+      `);
     }
 
     db.exec(`UPDATE schema_version SET version = ${SCHEMA_VERSION}`);
