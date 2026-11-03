@@ -22,7 +22,11 @@
 //       Slack ("Payment received");
 //     → every fee paid: Contract Stage "Paid needs action" and the Fee K moves
 //       to the "Paid Fee Ks" group (when its stage was still the payment-link
-//       one — a stage someone changed by hand is left).
+//       one — a stage someone changed by hand is left). By Fee K Type
+//       (lawpay/paid-route.ts, 2026-11-03): Master hearings and litigation
+//       skip Prescheduling (PS Stage "Completed" + "Create Project"); bonds
+//       go to the "Bond Motions" group instead; both fill an empty "It will
+//       go to…" first, so Monday opens the right board's item.
 //     no match → Slack "Payment to match"; refunds / failures → recorded only.
 //   A second copy of the same payment (same LawPay transaction) is a no-op.
 //
@@ -48,6 +52,7 @@ import { createNotification, fetchBoardStructure } from "@case-pipeline/monday";
 import { notifyEvent, slackEscape, withLink } from "../notify/slack.js";
 import { makeMondayUserByLogin } from "../contract-info.js";
 import { buzonFeeKPaid } from "../buzon/job.js";
+import { paidRoute, type PaidRoute } from "../lawpay/paid-route.js";
 import { CONTRACT_NOTE_ACTIVITY_ID } from "./profile-write.js";
 import {
   FEE_WORDS, feeKIdFromReference, isFullyPaid, normalizeReference, paidFees, parseReference, partsLeft, personName,
@@ -56,7 +61,16 @@ import {
 import type { LawPayReceipt } from "../lawpay/email.js";
 
 const PAID_STAGE = "Paid needs action";
+const CREATE_PROJECT_STAGE = "Create Project";
 const PAID_GROUP = "Paid Fee Ks";
+const BOND_GROUP = "Bond Motions";
+/** Fee Ks columns the paid step writes (config/boards.yaml). */
+const COL = { stage: "deal_stage", psStage: "status6__1", itWillGoTo: "status__1" } as const;
+const ROUTE_WORDS: Record<PaidRoute["kind"], string> = {
+  prescheduling: `moved to ${PAID_GROUP}`,
+  bond: `moved to ${BOND_GROUP}`,
+  skip: "no Prescheduling (marked Completed)",
+};
 const PENDING_GROUP = "Pending Fee Ks";
 /** A paid stage is only set over these — anything else was set by a person. */
 const PAYMENT_STAGES = new Set(["Payment link sent", "Needs Payment Link", ""]);
@@ -116,13 +130,82 @@ function feeKByName(db: DatabaseInstance, description: string): { row?: FeeKRow;
   return {};
 }
 
-let paidGroupId: { boardId: string; id: string } | null = null;
-async function paidGroup(boardId: string): Promise<string | null> {
-  if (paidGroupId?.boardId === boardId) return paidGroupId.id;
+const groupIds = new Map<string, string>();
+/** The Fee Ks board's group with this title (cached). */
+async function groupId(boardId: string, title: string): Promise<string | null> {
+  const k = `${boardId}:${title.toLowerCase()}`;
+  if (groupIds.has(k)) return groupIds.get(k)!;
   const board = await fetchBoardStructure(boardId);
-  const g = board.groups?.find((x) => x.title.trim().toLowerCase() === PAID_GROUP.toLowerCase());
-  if (g) paidGroupId = { boardId, id: g.id };
+  const g = board.groups?.find((x) => x.title.trim().toLowerCase() === title.toLowerCase());
+  if (g) groupIds.set(k, g.id);
   return g?.id ?? null;
+}
+
+const feeKTypesOf = (json: string | null): string[] => {
+  try { return (JSON.parse(json ?? "[]") as unknown[]).filter((t): t is string => typeof t === "string" && !!t.trim()); } catch { return []; }
+};
+
+/**
+ * The fully paid Fee K's next step, by its route (lawpay/paid-route.ts). A
+ * column write that fails is queued; a group move that fails is said in the
+ * returned note.
+ */
+async function routePaid(
+  db: DatabaseInstance, token: string | undefined, boardId: string,
+  row: { localId: string; mondayId: string }, route: PaidRoute,
+): Promise<string> {
+  const setColumns = async (values: Record<string, { label: string }>) => {
+    try {
+      await dataSource.setColumnValues(boardId, row.mondayId, values, token);
+    } catch (err) {
+      console.error("[lawpay] column write failed; queueing:", err);
+      for (const [columnId, value] of Object.entries(values)) {
+        enqueueWrite(db, { opType: "change_column_json", targetTable: "contracts", targetLocalId: row.localId, mondayItemId: row.mondayId, authorOid: null, payload: { boardId, columnId, value } });
+      }
+    }
+  };
+  const setLocalStage = (label: string) =>
+    db.prepare("UPDATE contracts SET raw_column_values = json_set(COALESCE(raw_column_values, '{}'), '$.contract_stage', json(?)) WHERE local_id = ?")
+      .run(JSON.stringify({ label }), row.localId);
+
+  // Monday's automations open the case's board item from "It will go to…", so
+  // it's filled first when empty — read fresh, never over what someone chose.
+  let boardNote = "";
+  if (route.kind !== "prescheduling") {
+    try {
+      const current = (await dataSource.getColumnText(row.mondayId, COL.itWillGoTo)).trim();
+      if (!current) {
+        await dataSource.setColumnValues(boardId, row.mondayId, { [COL.itWillGoTo]: { label: route.board } }, token);
+        boardNote = ` It will go to… → ${route.board}.`;
+      }
+    } catch (err) {
+      console.error("[lawpay] It will go to… failed:", err);
+      boardNote = ` Setting "It will go to…" to ${route.board} failed — please set it by hand.`;
+    }
+  }
+
+  if (route.kind === "skip") {
+    // Monday then moves it to Closed Fee Ks and opens the item on its board.
+    await setColumns({ [COL.psStage]: { label: "Completed" }, [COL.stage]: { label: CREATE_PROJECT_STAGE } });
+    setLocalStage(CREATE_PROJECT_STAGE);
+    return `✅ Fully paid — this case type skips Prescheduling: PS Stage → Completed, Contract Stage → ${CREATE_PROJECT_STAGE}.${boardNote}`;
+  }
+
+  await setColumns({ [COL.stage]: { label: PAID_STAGE } });
+  setLocalStage(PAID_STAGE);
+  const group = route.kind === "bond" ? BOND_GROUP : PAID_GROUP;
+  try {
+    const id = await groupId(boardId, group);
+    if (!id) throw new Error(`no "${group}" group on the board`);
+    await dataSource.moveItem(boardId, id, row.mondayId, token);
+    db.prepare("UPDATE contracts SET group_title = ? WHERE local_id = ?").run(group, row.localId);
+    // The Buzón starts now rather than when Monday's webhook echoes the stage back.
+    buzonFeeKPaid(row.mondayId);
+    return `✅ Fully paid: Contract Stage → ${PAID_STAGE}, moved to ${group}.${boardNote}`;
+  } catch (err) {
+    console.error(`[lawpay] move to ${group} failed:`, err);
+    return `✅ Fully paid: Contract Stage → ${PAID_STAGE}. Moving it to ${group} failed — please move it by hand.${boardNote}`;
+  }
 }
 
 interface LinkRow { id: number; contract_local_id: string; user_id: number | null; paid_at: string | null }
@@ -215,41 +298,23 @@ export async function applyLawPayEvent(deps: LawPayDeps, eventId: number, paymen
     `💵 LawPay payment received: ${FEE_WORDS[ref.fee]}${partWords} ${usd.format(payment.amount)}${payment.method ? ` (${payment.method})` : ""}. Reference: ${payment.reference}.`,
   ];
   if (left) lines.push(`${left === 1 ? "1 payment" : `${left} payments`} of the ${FEE_WORDS[ref.fee].toLowerCase()} still to come.`);
+  const types = feeKTypesOf(row.contractFor);
+  const route = paidRoute(types);
   let movedNote = "";
   if (full && row.mondayId && boardId) {
     if (PAYMENT_STAGES.has((row.stage ?? "").trim())) {
-      const value = { label: PAID_STAGE };
-      try {
-        await dataSource.setColumnValues(boardId, row.mondayId, { deal_stage: value }, token);
-      } catch (err) {
-        console.error("[lawpay] paid stage failed; queueing:", err);
-        enqueueWrite(db, { opType: "change_column_json", targetTable: "contracts", targetLocalId: row.localId, mondayItemId: row.mondayId, authorOid: null, payload: { boardId, columnId: "deal_stage", value } });
-      }
-      db.prepare("UPDATE contracts SET raw_column_values = json_set(COALESCE(raw_column_values, '{}'), '$.contract_stage', json(?)) WHERE local_id = ?")
-        .run(JSON.stringify(value), row.localId);
-      try {
-        const groupId = await paidGroup(boardId);
-        if (!groupId) throw new Error(`no "${PAID_GROUP}" group on the board`);
-        await dataSource.moveItem(boardId, groupId, row.mondayId, token);
-        db.prepare("UPDATE contracts SET group_title = ? WHERE local_id = ?").run(PAID_GROUP, row.localId);
-        movedNote = `✅ Fully paid: Contract Stage → ${PAID_STAGE}, moved to ${PAID_GROUP}.`;
-        // The Buzón starts now rather than when Monday's webhook echoes the stage back.
-        buzonFeeKPaid(row.mondayId);
-      } catch (err) {
-        console.error("[lawpay] move to Paid Fee Ks failed:", err);
-        movedNote = `✅ Fully paid: Contract Stage → ${PAID_STAGE}. Moving it to ${PAID_GROUP} failed — please move it by hand.`;
-      }
+      movedNote = await routePaid(db, token, boardId, { localId: row.localId, mondayId: row.mondayId }, route);
     } else {
       movedNote = `✅ Fully paid. The Contract Stage ("${row.stage}") was left as it is — it isn't the payment-link stage.`;
     }
     lines.push(movedNote);
   }
 
-  const types = (() => { try { return (JSON.parse(row.contractFor ?? "[]") as string[]).join(", "); } catch { return ""; } })();
   const body = lines.join("\n");
   // The Fee K's Updates, and the client's Profile — Updates and an E&A "Contract
   // note" — since staff read a client's history on the Profile.
-  const profileBody = types ? `${body}\nFee K: ${types}.` : body;
+  const typeList = types.join(", ");
+  const profileBody = typeList ? `${body}\nFee K: ${typeList}.` : body;
   const write = async (what: string, run: () => Promise<unknown>, queued: Parameters<typeof enqueueWrite>[1]) => {
     try {
       await run();
@@ -278,8 +343,8 @@ export async function applyLawPayEvent(deps: LawPayDeps, eventId: number, paymen
 
   const link2 = boardId && row.mondayId ? `${MONDAY_ACCOUNT_URL}/boards/${boardId}/pulses/${row.mondayId}` : null;
   await notifyEvent("payment_received", withLink(
-    `:moneybag: *${slackEscape(row.clientName)}* paid ${FEE_WORDS[ref.fee].toLowerCase()}${partWords} ${usd.format(payment.amount)}${types ? ` (${slackEscape(types)})` : ""}` +
-      (full ? " — *fully paid*, moved to Paid Fee Ks" : ""),
+    `:moneybag: *${slackEscape(row.clientName)}* paid ${FEE_WORDS[ref.fee].toLowerCase()}${partWords} ${usd.format(payment.amount)}${typeList ? ` (${slackEscape(typeList)})` : ""}` +
+      (full ? ` — *fully paid*, ${ROUTE_WORDS[route.kind]}` : ""),
     link2, "Fee K",
   ));
 

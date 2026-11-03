@@ -14,7 +14,7 @@ import Database from "better-sqlite3";
 import { initializeSchema } from "@case-pipeline/seed/db/schema";
 
 type Call = { op: string; [k: string]: unknown };
-const state = vi.hoisted(() => ({ calls: [] as Call[], slack: [] as [string, string][], moveFails: false, timelineFails: false }));
+const state = vi.hoisted(() => ({ calls: [] as Call[], slack: [] as [string, string][], moveFails: false, timelineFails: false, itWillGoTo: "" }));
 
 vi.mock("../db/users-db.js", async () => {
   const Db = (await import("better-sqlite3")).default;
@@ -57,12 +57,13 @@ vi.mock("../data-source/index.js", () => ({
       if (state.moveFails) throw new Error("Monday down");
       state.calls.push({ op: "move", boardId, groupId, itemId });
     },
+    getColumnText: async () => state.itWillGoTo,
   },
 }));
 vi.mock("@case-pipeline/monday", async (orig) => ({
   ...(await orig<typeof import("@case-pipeline/monday")>()),
   fetchWorkspaceUsers: async () => [{ id: "42", name: "Mayra Ruiz", email: "mayra@firm.com" }],
-  fetchBoardStructure: async () => ({ id: "B-FK", name: "Fee Ks", columns: [], groups: [{ id: "g_pending", title: "Pending Fee Ks" }, { id: "g_paid", title: "Paid Fee Ks" }] }),
+  fetchBoardStructure: async () => ({ id: "B-FK", name: "Fee Ks", columns: [], groups: [{ id: "g_pending", title: "Pending Fee Ks" }, { id: "g_paid", title: "Paid Fee Ks" }, { id: "g_bond", title: "Bond Motions" }] }),
   createNotification: async (userId: string, itemId: string, text: string) => { state.calls.push({ op: "notify", userId, itemId, text }); },
 }));
 
@@ -78,6 +79,7 @@ beforeEach(() => {
   state.slack = [];
   state.moveFails = false;
   state.timelineFails = false;
+  state.itWillGoTo = "";
   usersDb.exec("DELETE FROM payment_links; DELETE FROM lawpay_events;");
   db = new Database(":memory:");
   initializeSchema(db);
@@ -210,6 +212,46 @@ describe("LawPay payments", () => {
     await pay(AF, 412000, "c");
     await pay(FF, 121025, "d");
     expect(state.calls.map((c) => String(c.body ?? "")).join("\n")).toContain("Moving it to Paid Fee Ks failed — please move it by hand");
+  });
+
+  /** Make c1 a Fee K of this type whose only fee is a $900 AF. */
+  const asType = (feeKType: string) =>
+    db.prepare("UPDATE contracts SET raw_column_values = ? WHERE local_id = 'c1'").run(JSON.stringify({
+      contract_stage: { label: "Payment link sent" }, fee_k_type: { labels: [feeKType] }, af: 900,
+    }));
+
+  it("a Master hearing skips Prescheduling: It will go to → Court Cases, then Completed + Create Project, no move", async () => {
+    asType("Master (c)");
+    expect(await pay("ANA LOPEZ MASTER - AF 900", 90000, "m1")).toBe("fully_paid");
+    const columns = state.calls.filter((c) => c.op === "columns");
+    expect(columns.map((c) => c.values)).toEqual([
+      { status__1: { label: "Court Cases" } },
+      { status6__1: { label: "Completed" }, deal_stage: { label: "Create Project" } },
+    ]);
+    expect(state.calls.some((c) => c.op === "move")).toBe(false);
+    expect(String(state.calls.find((c) => c.op === "update")?.body)).toContain("skips Prescheduling: PS Stage → Completed");
+    expect(state.slack.at(-1)![1]).toContain("no Prescheduling");
+    expect(local()).toEqual({ g: "Pending Fee Ks", s: "Create Project" });
+  });
+
+  it("litigation skips Prescheduling too, and keeps an It will go to someone already chose", async () => {
+    asType("Habeas");
+    state.itWillGoTo = "Already in board";
+    await pay("ANA LOPEZ HABEAS - AF 900", 90000, "h1");
+    expect(state.calls.filter((c) => c.op === "columns").map((c) => c.values)).toEqual([
+      { status6__1: { label: "Completed" }, deal_stage: { label: "Create Project" } },
+    ]);
+  });
+
+  it("a bond: It will go to → Motions, Paid needs action, moved to Bond Motions", async () => {
+    asType("Bond MTN  (c)");
+    await pay("ANA LOPEZ BOND - AF 900", 90000, "b1");
+    expect(state.calls.filter((c) => c.op === "columns").map((c) => c.values)).toEqual([
+      { status__1: { label: "Motions" } },
+      { deal_stage: { label: "Paid needs action" } },
+    ]);
+    expect(state.calls.find((c) => c.op === "move")).toMatchObject({ groupId: "g_bond" });
+    expect(local()).toEqual({ g: "Bond Motions", s: "Paid needs action" });
   });
 
   it("refunds are recorded only; bad link payloads are refused", async () => {

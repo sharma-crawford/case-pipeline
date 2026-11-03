@@ -81,6 +81,16 @@ Good to know:
 
 When the client pays, the app reads LawPay's receipt, adds a note to the Fee K and to the client's Profile (its **Updates** and **Emails & Activities**), tells whoever sent the links, and — when every fee is paid — moves it to **Paid Fee Ks** with stage *Paid needs action*.
 
+Some case types go somewhere else once fully paid:
+
+| Fee K Type | What the app does |
+|---|---|
+| Master, Detained Master | Skips Prescheduling: PS Stage *Completed*, Contract Stage *Create Project*. Monday then closes the Fee K and opens the **Court Cases** item. |
+| Habeas, Mandamus, Litigation, Federal Litigation | The same, and Monday opens the **Litigation** item. |
+| Bond, Emergency Bond | *Paid needs action*, moved to the **Bond Motions** group (Prescheduling for the bond hearing). |
+
+If **It will go to…** is empty, the app fills it first (Court Cases, Litigations or Motions), since Monday uses it to open the right item. One someone already chose (for example *Already in board*) is kept.
+
 ### Split a payment
 
 If the client's bank won't let them pay a fee all at once (a daily limit):
