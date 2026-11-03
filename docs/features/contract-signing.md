@@ -112,7 +112,10 @@ add a contract.
   `{{#uscis_filing}}`, left out for a CVP, which goes to the NVC) plus
   `{{services}}` / `{{services_excluded}}` (+ `_es`) from the Fee K Type's
   scope in Settings → Firm → Fee K Types ("Scope…" on each row; the draft
-  carries the 11 approved examples and is used until the table is saved);
+  carries the 11 approved examples + CVP, and since 2026-11-03 a drafted scope
+  for every other type but Adams packet, for attorney review; it is used until
+  the table is saved — after that `npm run feek:scope -- --apply` copies the
+  draft into saved rows whose scope is empty);
   M22 shows them in a "Scope of services" box, editable for that contract,
   empty = nothing extra printed.
 - **Generate contract…** lists the folder, downloads the picked template and
