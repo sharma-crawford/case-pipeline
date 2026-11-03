@@ -44,6 +44,10 @@ Per matched file, two independent steps, each stamped in `drive_intake_files` (s
 | SharePoint | Upload into `CONSULT`/`CONSULTS` of the folder recorded on the client: **E-File → Consult File → appointment's Consult SharePoint**. Creates `CONSULT` if neither exists. Large files (20 MB TIFFs) use an upload session. | Same name and size already in the folder (reception copied it). Same name, different size → uploaded beside it, renamed. |
 | Monday | One update per appointment per run — "📎 Documents the client uploaded to Google Drive (n)" — with the files attached. Update attachments show in the item's **Files gallery**, so this works on boards with no Files column (R, M, CR). | A file with the same name and size is already on the item. |
 
+Google Drive's 5xx errors ("Unknown Error") are retried 4 times with backoff, like its rate limits.
+
+**Failure alert** (Slack ops, `ops_drive_intake`): a run that exits non-zero posts why — the crash reason (`[drive] FATAL …`), or up to 5 `file → client: error` lines from the `FAILED` output — plus the run's totals. Settings → Workflows shows the same reason. See `apps/api/src/notify/drive-intake-alert.ts`.
+
 The job never creates a **client** folder: the consult sweep does that when the consult is booked. A client with no recorded folder yet is counted as *waiting* and picked up on a later run.
 
 ## Folder links

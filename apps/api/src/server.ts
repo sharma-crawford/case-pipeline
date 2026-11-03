@@ -125,6 +125,7 @@ import { registerRingCentralWebhook } from "./phone/call-events.js";
 import { schedulingTextListener } from "./phone/scheduling-text.js";
 import { startWebhookProcessor, createBoardKeyResolver } from "./webhooks/processor.js";
 import { notifyOps, inBackground, postEvent } from "./notify/slack.js";
+import { intakeAlertText, intakeRunError, parseIntakeOutput } from "./notify/drive-intake-alert.js";
 import { runSlackQueue, recoverInterrupted } from "./notify/slack-queue.js";
 import { registerSlackQueueRoutes } from "./routes/slack-queue.js";
 import { registerWorkflowsRoutes } from "./routes/workflows.js";
@@ -1057,16 +1058,32 @@ function scheduleDriveIntake() {
       const runId = startRun(usersDb, "drive_intake");
       const child = spawn("npm", ["run", "drive:intake", "--", "--apply"], {
         cwd: REPO_ROOT,
-        stdio: "inherit",
+        stdio: ["ignore", "pipe", "pipe"],
         env: process.env,
         shell: true,
       });
+      // Still echoed to the API log; the tail is kept so the alert can say what failed.
+      let output = "";
+      let lastErr: string | null = null;
+      const keep = (chunk: Buffer) => {
+        output = (output + chunk.toString()).slice(-64_000);
+      };
+      child.stdout.on("data", (chunk: Buffer) => {
+        process.stdout.write(chunk);
+        keep(chunk);
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        process.stderr.write(chunk);
+        keep(chunk);
+        lastErr = chunk.toString().split(/\r?\n/).map((l) => l.trim()).filter(Boolean).at(-1) ?? lastErr;
+      });
       child.on("close", (code) => {
         intakeInFlight = false;
-        finishRun(usersDb, runId, { error: code === 0 ? null : `exit code ${code}` });
-        if (code !== 0) {
+        const failure = code === 0 ? null : parseIntakeOutput(output);
+        finishRun(usersDb, runId, { error: failure ? intakeRunError(code, failure) : null });
+        if (failure) {
           console.error(`[drive] Intake exited with code ${code}`);
-          inBackground(notifyOps("ops_drive_intake", `Drive intake failed (exit code ${code}). Client uploads aren't being copied to SharePoint until it runs again.`));
+          inBackground(notifyOps("ops_drive_intake", intakeAlertText(code, failure, lastErr)));
         }
       });
       child.on("error", (err) => {

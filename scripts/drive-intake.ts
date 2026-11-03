@@ -531,12 +531,18 @@ async function main() {
             tally.monday++;
           } catch (err) {
             tally.failed++;
-            fail(file.id, `Monday attach: ${err instanceof Error ? err.message : String(err)}`);
+            const message = `Monday attach: ${err instanceof Error ? err.message : String(err)}`;
+            fail(file.id, message);
+            console.error(`  FAILED  ${file.name} → ${who}: ${message}`);
           }
         }
       } catch (err) {
         tally.failed++;
-        for (const { file } of toMonday) fail(file.id, `Monday update: ${err instanceof Error ? err.message : String(err)}`);
+        const message = `Monday update: ${err instanceof Error ? err.message : String(err)}`;
+        for (const { file } of toMonday) {
+          fail(file.id, message);
+          console.error(`  FAILED  ${file.name} → ${who}: ${message}`);
+        }
       }
     }
     console.log(`  ${who}: ${group.length} file(s)${dest ? "" : ` — SharePoint waiting: ${destProblem}`}`);
@@ -581,6 +587,7 @@ function row(values: Array<string | null>): string {
 }
 
 main().catch((err) => {
-  console.error("[drive]", err instanceof Error ? err.message : String(err));
+  // One line, so the API's failure alert can quote it (notify/drive-intake-alert.ts).
+  console.error("[drive] FATAL", (err instanceof Error ? err.message : String(err)).replace(/\s+/g, " "));
   process.exit(1);
 });
