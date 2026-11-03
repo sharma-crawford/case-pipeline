@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boardRouting, contractTitles, needsPrescheduling, sanitizeDocuments, feeKTypeLookup, sanitizeFeeKTypes, scopeFor, type FeeKTypeRow } from "./fee-k-types.js";
+import { boardRouting, contractTitles, fillEmptyScope, needsPrescheduling, sanitizeDocuments, feeKTypeLookup, sanitizeFeeKTypes, scopeFor, type FeeKTypeRow } from "./fee-k-types.js";
 import { DRAFT_FEE_K_TYPES } from "./fee-k-types-draft.js";
 import { SUGGESTED_DOCUMENTS } from "./fee-k-type-documents-draft.js";
 
@@ -125,10 +125,31 @@ describe("scope of services", () => {
   it("the draft carries the approved text for the example types, on real Fee K Types", () => {
     const withScope = DRAFT_FEE_K_TYPES.filter((r) => r.services);
     expect(withScope.map((r) => r.feeKType)).toEqual(expect.arrayContaining(["I-485 + I-130 - Full Packet", "CVP - Consular Visa Process"]));
-    expect(withScope).toHaveLength(12);
+    // Every type but Adams packet (nothing says what it covers), 2026-11-03.
+    expect(DRAFT_FEE_K_TYPES.filter((r) => !r.services).map((r) => r.feeKType)).toEqual(["Adams packet"]);
     for (const r of withScope) expect([r.servicesEs, r.excluded, r.excludedEs].every(Boolean)).toBe(true);
     // Saving the table must not cut the approved text.
     expect(sanitizeFeeKTypes(withScope)).toEqual(withScope.map((r) => expect.objectContaining({ services: r.services, servicesEs: r.servicesEs, excluded: r.excluded, excludedEs: r.excludedEs })));
+  });
+});
+
+describe("fillEmptyScope", () => {
+  const starter = [
+    { ...BLANK, feeKType: "I-130 - Petition for Alien Relative", services: "A.", servicesEs: "A es.", excluded: "No A.", excludedEs: "No A es." },
+    { ...BLANK, feeKType: "I-765 - EAD Renewal", services: "B.", servicesEs: "B es.", excluded: "No B.", excludedEs: "No B es." },
+  ];
+
+  it("fills a saved row with no scope; keeps a row with any scope text; leaves the rest", () => {
+    const saved = [
+      { ...BLANK, feeKType: "i-130 - petition for alien relative", board: "Open Forms" },
+      { ...BLANK, feeKType: "I-765 - EAD Renewal", excluded: "Admin's own." },
+      { ...BLANK, feeKType: "Unknown", board: "Open Forms" },
+    ];
+    const { rows, filled } = fillEmptyScope(saved, starter);
+    expect(filled).toEqual(["i-130 - petition for alien relative"]);
+    expect(rows[0]).toEqual({ ...saved[0], services: "A.", servicesEs: "A es.", excluded: "No A.", excludedEs: "No A es." });
+    expect(rows[1]).toBe(saved[1]);
+    expect(rows[2]).toBe(saved[2]);
   });
 });
 

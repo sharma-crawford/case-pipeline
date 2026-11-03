@@ -196,3 +196,20 @@ export function contractTitles(feeKTypes: string[], rows: FeeKTypeRow[]): { en: 
   const es = feeKTypes.map((t) => find(t)?.spanish || contractTitle(t)).filter(Boolean);
   return { en: en.join(" + "), es: es.join(" + ") };
 }
+
+/**
+ * The saved table with each row's EMPTY scope filled from `starter` (the
+ * draft), matched by Fee K Type. A row with any scope text keeps all of it, so
+ * an admin's edits are never touched. `filled` = the types that changed.
+ */
+export function fillEmptyScope(saved: FeeKTypeRow[], starter: FeeKTypeRow[]): { rows: FeeKTypeRow[]; filled: string[] } {
+  const find = feeKTypeLookup(starter);
+  const filled: string[] = [];
+  const rows = saved.map((r) => {
+    const s = find(r.feeKType);
+    if (!s?.services || SCOPE_FIELDS.some((k) => r[k])) return r;
+    filled.push(r.feeKType);
+    return { ...r, ...Object.fromEntries(SCOPE_FIELDS.map((k) => [k, s[k]])) };
+  });
+  return { rows, filled };
+}

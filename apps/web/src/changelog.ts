@@ -14,6 +14,14 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    date: "2026-11-03",
+    title: "Every case type has a scope of services",
+    items: [
+      "Contracts now list what is included and what is not for every case type, in English and Spanish — not only the first 12. Adams packet is the only one still empty.",
+      "An admin can read and change the text in Settings → Firm → Fee K Types → Scope…, and you can still change it for one contract in the Scope of services box.",
+    ],
+  },
+  {
     date: "2026-11-02",
     title: "LawPay payments show on the client's Profile",
     items: [

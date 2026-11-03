@@ -44,6 +44,7 @@
     "history:backfill": "tsx --env-file-if-exists=.env scripts/history-backfill.ts",
     "ea:full-text": "tsx --env-file-if-exists=.env scripts/ea-full-text.ts",
     "dob:backfill": "tsx --env-file-if-exists=.env scripts/dob-backfill.ts",
+    "feek:scope": "tsx scripts/fee-k-scope.ts",
     "staff:import": "tsx --env-file-if-exists=.env scripts/staff-import.ts",
     "sms:check": "tsx --env-file-if-exists=.env scripts/ringcentral-check.ts",
     "rc:subscribe": "tsx --env-file-if-exists=.env scripts/rc-subscribe.ts"
