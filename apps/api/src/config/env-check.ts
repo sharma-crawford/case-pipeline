@@ -246,6 +246,7 @@ export function checkEnvironment(opts: CheckOptions = {}): EnvIssue[] {
     "CONSULT_SWEEP_CRON",
     "DRIVE_INTAKE_CRON",
     "FEE_K_AUTOFILL_CRON",
+    "ESIGN_SCHEDULED_CRON",
   ] as const) {
     const expr = env[key]?.trim();
     if (expr && !cron.validate(expr)) {
@@ -298,6 +299,9 @@ export function checkEnvironment(opts: CheckOptions = {}): EnvIssue[] {
       warn("ZAPIER_ESIGN_SECRET", `is short (${esignSecret.length} chars) — it is the only thing authenticating the Zapier endpoint`, "openssl rand -hex 24");
     }
     if (!env.API_URL?.trim()) err("API_URL", "is required for Adobe Sign — Zapier downloads the contract PDF from it");
+  }
+  if (env.ESIGN_SCHEDULED?.trim() === "on" && !(esignHook && esignSecret)) {
+    err("ESIGN_SCHEDULED", "needs ZAPIER_ESIGN_HOOK_URL and ZAPIER_ESIGN_SECRET", "Scheduled sends go out through the same Zap 1 as Send for signature.");
   }
   const lawpayMail = env.LAWPAY_MAIL?.trim().toLowerCase();
   if (lawpayMail && !["on", "off"].includes(lawpayMail)) err("LAWPAY_MAIL", "must be on or off");

@@ -66,7 +66,11 @@ export function driveClientFromEnv(): DriveClient {
   return createDriveClient(key);
 }
 
-export function createDriveClient(key: ServiceAccountKey, fetchImpl: typeof fetch = fetch): DriveClient {
+export function createDriveClient(
+  key: ServiceAccountKey,
+  fetchImpl: typeof fetch = fetch,
+  wait: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+): DriveClient {
   let cached: { token: string; expiresAt: number } | null = null;
 
   async function token(): Promise<string> {
@@ -98,10 +102,11 @@ export function createDriveClient(key: ServiceAccountKey, fetchImpl: typeof fetc
   async function call(url: string): Promise<Response> {
     for (let attempt = 1; ; attempt++) {
       const res = await fetchImpl(url, { headers: { Authorization: `Bearer ${await token()}` } });
-      // Drive asks for backoff with 429 and 403 rateLimitExceeded alike.
+      // Drive asks for backoff with 429 and 403 rateLimitExceeded alike, and
+      // its 5xx ("Unknown Error") are one-offs that a retry gets past.
       const limited = res.status === 429 || (res.status === 403 && /rateLimit/i.test(await res.clone().text()));
-      if (limited && attempt < 5) {
-        await new Promise((r) => setTimeout(r, 2 ** attempt * 500));
+      if ((limited || res.status >= 500) && attempt < 5) {
+        await wait(2 ** attempt * 500);
         continue;
       }
       if (!res.ok) throw new Error(`Drive ${res.status}: ${(await res.text()).slice(0, 300)}`);

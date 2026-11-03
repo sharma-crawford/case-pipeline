@@ -34,11 +34,17 @@
 // saved in this browser per Fee K and comes back on the next open, with
 // "Start over" to go back to the Monday pre-fill. Sending clears it; drafts
 // older than 14 days are dropped.
+// "Send on scheduled date" (server ESIGN_SCHEDULED=on) sends the same preview
+// later instead: the server keeps the PDF and sends it on the Fee K's "Send Fee
+// K By:" date (stage → SCHEDULED; esign/scheduled.ts). A Fee K with one
+// waiting shows its date and "Cancel scheduled send" instead of the send buttons.
 // =============================================================================
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fetchContractPrefill, fetchEsignStatus, fetchFeeKTypes, logContractGenerated, sendContractForSignature } from "../api";
-import type { PendingContract } from "../api";
+import {
+  cancelScheduledEsign, fetchContractPrefill, fetchEsignStatus, fetchFeeKTypes, fetchScheduledEsign, logContractGenerated, sendContractForSignature,
+} from "../api";
+import type { PendingContract, ScheduledEsign } from "../api";
 import { useAuth } from "../auth/useAuth";
 import {
   convertDocxToPdf, downloadDriveFile, getGraphToken, listContractTemplates,
@@ -109,6 +115,9 @@ function clearDraft(feeK: string) {
 }
 const savedAtLabel = (iso: string) =>
   new Date(iso).toLocaleString("en-US", { month: "2-digit", day: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit" });
+/** "2026-11-05" → "Thu, Nov 5" (a calendar date, no time zone shift). */
+const sendOnLabel = (ymd: string) =>
+  new Date(`${ymd}T12:00:00Z`).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
 
 function save(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -170,11 +179,14 @@ export function GenerateContractModal({ contract: c, onClose, onSent }: Props) {
   // Monday's one-line address, and the same split for a letter (API: letterAddress).
   const [addr, setAddr] = useState<{ full: string; street: string; cityStateZip: string } | null>(null);
   const [loadingFile, setLoadingFile] = useState(false);
-  const [busy, setBusy] = useState<"preview" | "docx" | "send" | null>(null);
+  const [busy, setBusy] = useState<"preview" | "docx" | "send" | "schedule" | "cancel" | null>(null);
   // The PDF being previewed. Leaving the preview drops it, so any edit makes a new one.
   const [preview, setPreview] = useState<{ pdf: Blob; url: string; name: string } | null>(null);
   const previewUrl = useRef<string | null>(null);
   const [esign, setEsign] = useState(false);
+  // Send on scheduled date (server switch), and the send already waiting for this Fee K.
+  const [canSchedule, setCanSchedule] = useState(false);
+  const [scheduled, setScheduled] = useState<ScheduledEsign | null>(null);
   const [attorneyEmail, setAttorneyEmail] = useState("");
   // Who can sign (active roster attorneys + e-mails), from the pre-fill.
   const [attorneys, setAttorneys] = useState<{ name: string; email: string }[]>([]);
@@ -212,7 +224,19 @@ export function GenerateContractModal({ contract: c, onClose, onSent }: Props) {
     const draft = loadDraft(c.localId);
     draftTemplate.current = draft?.templateId ?? null;
     void loadTemplates();
-    fetchEsignStatus().then((s) => setEsign(s.enabled)).catch(() => setEsign(false));
+    fetchEsignStatus()
+      .then((s) => {
+        setEsign(s.enabled);
+        setCanSchedule(!!s.scheduling);
+        // Its own catch: a failed lookup must not hide Send for signature.
+        if (s.enabled) {
+          Promise.resolve()
+            .then(() => fetchScheduledEsign(c.localId))
+            .then(setScheduled)
+            .catch(() => setScheduled(null));
+        }
+      })
+      .catch(() => setEsign(false));
     // The Fee K Type list (Monday's labels) + each type's Spanish name and scope.
     fetchFeeKTypes()
       .then((t) => setTypes({ labels: t.feeKTypes.length > 0 ? t.feeKTypes : t.rows.map((r) => r.feeKType), rows: t.rows }))
@@ -393,26 +417,44 @@ export function GenerateContractModal({ contract: c, onClose, onSent }: Props) {
   const sendReady = !!input && emailOk(attorneyEmail) && emailOk(input.email)
     && attorneyEmail.trim().toLowerCase() !== input.email.trim().toLowerCase();
 
-  const sendForSignature = async () => {
+  /** Now, or (`later`) kept on the server until the Fee K's Send Fee K By date. */
+  const sendForSignature = async (later = false) => {
     if (!input || !picked || !preview || !sendReady) return;
-    setBusy("send");
+    setBusy(later ? "schedule" : "send");
     setError(null);
     setDone(null);
     try {
       // Exactly the PDF on screen.
       const res = await sendContractForSignature(c.localId, preview.pdf, {
-        attorneyEmail: attorneyEmail.trim(), clientEmail: input.email.trim(), documentName: preview.name,
+        attorneyEmail: attorneyEmail.trim(), clientEmail: input.email.trim(), documentName: preview.name, schedule: later,
       });
       void logContractGenerated(c.localId, { template: picked.name, format: "pdf", attorneyFee: afOf(input), filingFee: input.filingFee });
-      // Sent: nothing left to resume.
+      // Sent (or scheduled): nothing left to resume.
       dirty.current = false;
       clearDraft(c.localId);
-      const msg = `${c.clientName}: sent to Adobe Sign (attorney first, then the client)${res.stage ? ` · stage → ${res.stage}` : ""}`;
+      const msg = res.scheduled
+        ? `${c.clientName}: scheduled — goes to Adobe Sign on ${res.sendOn ? sendOnLabel(res.sendOn) : "the Send Fee K By date"} · stage → ${res.stage}`
+        : `${c.clientName}: sent to Adobe Sign (attorney first, then the client)${res.stage ? ` · stage → ${res.stage}` : ""}`;
       if (res.warning) setDone(`Sent to Adobe Sign. ${res.warning}`);
       else { onSent?.(msg); onClose(); }
     } catch (e) {
       if (e instanceof GraphConsentRequiredError) setNeedsConsent(true);
       else setError(e instanceof Error ? e.message : "Could not send the contract");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const cancelScheduled = async () => {
+    if (!scheduled || !window.confirm("Cancel the scheduled send? Nothing goes to Adobe Sign, and the Contract Stage stays as it is.")) return;
+    setBusy("cancel");
+    setError(null);
+    try {
+      await cancelScheduledEsign(c.localId);
+      setScheduled(null);
+      setDone("Scheduled send canceled.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not cancel the scheduled send");
     } finally {
       setBusy(null);
     }
@@ -501,8 +543,14 @@ export function GenerateContractModal({ contract: c, onClose, onSent }: Props) {
                   title={esign ? "Download this PDF instead of sending it" : "Download this PDF — send it from Acrobat (attorney first, then the client)"}>
                   Download PDF
                 </Button>
-                {esign && (
-                  <Button type="button" disabled={!sendReady || busy !== null} onClick={sendForSignature}
+                {esign && canSchedule && !scheduled && (
+                  <Button type="button" variant="outline" disabled={!sendReady || busy !== null} onClick={() => sendForSignature(true)}
+                    title="Keep this PDF and send it to Adobe Sign on the Fee K's Send Fee K By date (stage → SCHEDULED)">
+                    {busy === "schedule" ? "Scheduling…" : "Send on scheduled date"}
+                  </Button>
+                )}
+                {esign && !scheduled && (
+                  <Button type="button" disabled={!sendReady || busy !== null} onClick={() => sendForSignature()}
                     title="Send this PDF to Adobe Sign: attorney first, then the client">
                     {busy === "send" ? "Sending…" : "Send for signature"}
                   </Button>
@@ -512,6 +560,19 @@ export function GenerateContractModal({ contract: c, onClose, onSent }: Props) {
           </div>
         ) : (
         <div className="px-5 py-4 space-y-4">
+          {scheduled && (
+            <div className="text-sm rounded p-3 flex items-center gap-2" style={{ background: "var(--color-surface-warm)", border: "1px solid var(--color-border-light)", color: "var(--color-ink)" }}>
+              <span>
+                🗓 Scheduled{scheduled.by ? ` by ${scheduled.by}` : ""}: goes to Adobe Sign on{" "}
+                <strong>{scheduled.sendOn ? sendOnLabel(scheduled.sendOn) : "the Send Fee K By date"}</strong> (or the new date, if it moves in Calendaring).
+                {scheduled.lastError && <span style={{ color: "var(--urgency-overdue)" }}> Last try failed: {scheduled.lastError}</span>}
+              </span>
+              <Button type="button" size="sm" variant="outline" className="ml-auto shrink-0" disabled={busy !== null} onClick={cancelScheduled}
+                title="Don't send it; the PDF is deleted and the Contract Stage stays as it is">
+                {busy === "cancel" ? "Canceling…" : "Cancel scheduled send"}
+              </Button>
+            </div>
+          )}
           {resumedAt && (
             <div className="text-sm rounded p-3 flex items-center gap-2" style={{ background: "var(--color-surface-warm)", border: "1px solid var(--color-border-light)", color: "var(--color-ink)" }}>
               Picked up where you left off — saved {savedAtLabel(resumedAt)}.
@@ -816,6 +877,7 @@ export function GenerateContractModal({ contract: c, onClose, onSent }: Props) {
               <p className="text-xs" style={{ color: "var(--color-ink-faint)" }}>
                 Preview first, then send from the preview. Sending moves the stage to Atty Reviewing and leaves a note on Monday.
                 Each signature updates the stage by itself; you get a Monday notification when the client signs.
+                {canSchedule && " Send on scheduled date keeps the PDF and sends it on the Fee K's Send Fee K By date instead (stage → SCHEDULED)."}
               </p>
             </div>
           )}

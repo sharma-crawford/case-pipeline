@@ -702,3 +702,27 @@ describe("v38 → v39 Buzón checklist", () => {
     expect(db.prepare("SELECT COUNT(*) AS n FROM buzon_texts").get()).toEqual({ n: 0 });
   });
 });
+
+describe("v39 → v40 scheduled Adobe Sign sends", () => {
+  test("esign_agreements gets document_name / send_on / sent_at, keeping its rows, and the reminders table appears", () => {
+    const db = new Database(":memory:");
+    initializeSchema(db);
+    db.exec(`
+      ALTER TABLE esign_agreements DROP COLUMN document_name;
+      ALTER TABLE esign_agreements DROP COLUMN send_on;
+      ALTER TABLE esign_agreements DROP COLUMN sent_at;
+      DROP TABLE esign_schedule_reminders;
+      UPDATE schema_version SET version = 39;
+    `);
+    db.prepare(
+      `INSERT INTO esign_agreements (contract_local_id, contract_monday_id, client_name, client_email, attorney_email, file_token, status)
+       VALUES ('c1', '555', 'Client', 'c@x.com', 'a@x.com', 'tok', 'signed')`,
+    ).run();
+    initializeSchema(db);
+    expect((db.prepare("SELECT version FROM schema_version").get() as { version: number }).version).toBe(SCHEMA_VERSION);
+    expect(db.prepare("SELECT status, document_name, send_on, sent_at FROM esign_agreements").get())
+      .toEqual({ status: "signed", document_name: null, send_on: null, sent_at: null });
+    db.prepare("INSERT INTO esign_schedule_reminders (contract_monday_id, send_on) VALUES ('555', '2026-11-05')").run();
+    expect(db.prepare("INSERT OR IGNORE INTO esign_schedule_reminders (contract_monday_id, send_on) VALUES ('555', '2026-11-05')").run().changes).toBe(0);
+  });
+});

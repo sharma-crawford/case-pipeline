@@ -160,7 +160,8 @@ export interface ContractStepDef {
 export const CONTRACT_STEPS: Record<ContractStep, ContractStepDef> = {
   // Sent from Acrobat to the attorney (who signs first; Acrobat then emails the client).
   sent_for_signature: {
-    from: [null, "Needs to be sent", "Ready to be sent", "Create to sign in office", "Needs to be Amended"],
+    // "SCHEDULED - fee k to be sent": a scheduled send (esign/scheduled.ts) going out on its date.
+    from: [null, "Needs to be sent", "Ready to be sent", "Create to sign in office", "Needs to be Amended", "SCHEDULED - fee k to be sent"],
     to: "Atty Reviewing",
     date: null,
   },

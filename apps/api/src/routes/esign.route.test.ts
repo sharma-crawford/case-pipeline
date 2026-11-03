@@ -62,11 +62,21 @@ vi.mock("@case-pipeline/monday", async (orig) => ({
   createNotification: async (userId: string, itemId: string, text: string) => {
     calls.push({ op: "notify", userId, itemId, text });
   },
+  // The Fee Ks as Monday has them now (scheduled sends): stage + the "Send Fee K By:" mirror.
+  fetchItemsByIds: async (ids: string[]) =>
+    ids.filter((id) => mondayNow.items[id]).map((id) => ({
+      id, name: "Fee K", state: "active",
+      column_values: [
+        { id: "deal_stage", text: mondayNow.items[id]!.stage },
+        { id: "lookup_mm55y7zr", text: null, display_value: mondayNow.items[id]!.sendBy ?? "" },
+      ],
+    })),
 }));
+const mondayNow = vi.hoisted(() => ({ items: {} as Record<string, { stage: string; sendBy: string | null }> }));
 
-const { registerEsignRoutes, registerEsignPublicRoutes } = await import("./esign.js");
+const { registerEsignRoutes, registerEsignPublicRoutes, runScheduledEsign } = await import("./esign.js");
 
-const STAGES = ["Needs to be sent", "Atty Reviewing", "Sent to Client", "Needs Payment Link"];
+const STAGES = ["Needs to be sent", "Atty Reviewing", "Sent to Client", "Needs Payment Link", "SCHEDULED - fee k to be sent"];
 let db: Database.Database;
 let server: Server;
 let zapier: Server;
@@ -241,5 +251,129 @@ describe("Adobe Sign via Zapier", () => {
   it("needs two different e-mails", async () => {
     expect((await send("attorneyEmail=atty@firm.com&clientEmail=")).status).toBe(400);
     expect((await send("attorneyEmail=a@b.com&clientEmail=A@b.com")).status).toBe(400);
+  });
+});
+
+describe("Scheduled sends (Send on scheduled date)", () => {
+  const SCHEDULED = "SCHEDULED - fee k to be sent";
+  const schedule = () => send("attorneyEmail=atty@firm.com&clientEmail=ana@mail.com&documentName=11-05-26%20-%20Contract%20-%20A.%20PEREZ&schedule=1");
+  const row = () => db.prepare("SELECT status, send_on, sent_at, last_error FROM esign_agreements ORDER BY id DESC LIMIT 1").get() as
+    { status: string; send_on: string | null; sent_at: string | null; last_error: string | null };
+  const notes = () => calls.filter((c) => c.op === "update").map((c) => String(c.body)).join("\n");
+
+  beforeEach(() => {
+    process.env.ESIGN_SCHEDULED = "on";
+    mondayNow.items = { "555": { stage: "Needs to be sent", sendBy: "2026-11-05" } };
+  });
+  afterEach(() => { delete process.env.ESIGN_SCHEDULED; });
+
+  it("keeps the PDF, moves the stage to SCHEDULED, and sends nothing yet", async () => {
+    const r = await schedule();
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as { data: Record<string, unknown> }).data).toMatchObject({ scheduled: true, sendOn: "2026-11-05" });
+    expect(hookBodies).toEqual([]);
+    expect(row()).toMatchObject({ status: "scheduled", send_on: "2026-11-05", sent_at: null });
+    expect(stage()).toBe(SCHEDULED);
+    expect(calls.find((c) => c.op === "columns")).toMatchObject({ itemId: "555", values: { deal_stage: { label: SCHEDULED } } });
+    expect(notes()).toContain("goes to Adobe Sign on Thursday, Nov 5");
+    // Not served to Zapier before it is sent.
+    const token = (db.prepare("SELECT file_token FROM esign_agreements").get() as { file_token: string }).file_token;
+    expect((await fetch(`${base}/api/esign/files/${token}/x.pdf`)).status).toBe(404);
+    // A second send (now or later) is refused while one waits.
+    expect((await send()).status).toBe(409);
+    expect((await schedule()).status).toBe(409);
+  });
+
+  it("refuses with no Send Fee K By date, a past one, or when the switch is off", async () => {
+    mondayNow.items["555"]!.sendBy = null;
+    expect((await schedule()).status).toBe(409);
+    mondayNow.items["555"]!.sendBy = "2020-01-01";
+    expect((await schedule()).status).toBe(409);
+    delete process.env.ESIGN_SCHEDULED;
+    mondayNow.items["555"]!.sendBy = "2099-01-01";
+    expect((await schedule()).status).toBe(503);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM esign_agreements").get()).toEqual({ n: 0 });
+  });
+
+  it("waits until the date, then sends that PDF like Send for signature", async () => {
+    await schedule();
+    mondayNow.items["555"]!.stage = SCHEDULED;
+    calls = [];
+
+    let r = await runScheduledEsign(db, "shared", { today: "2026-11-04" });
+    expect(r).toMatchObject({ sent: 0, waiting: 1 });
+    expect(hookBodies).toEqual([]);
+
+    // The date moved later in Calendaring: the live one counts.
+    mondayNow.items["555"]!.sendBy = "2026-11-10";
+    r = await runScheduledEsign(db, "shared", { today: "2026-11-05" });
+    expect(r).toMatchObject({ sent: 0, waiting: 1 });
+
+    r = await runScheduledEsign(db, "shared", { today: "2026-11-10" });
+    expect(r).toMatchObject({ sent: 1, waiting: 0, failed: [] });
+    expect(hookBodies).toHaveLength(1);
+    expect(hookBodies[0]).toMatchObject({ ref: "CP-1", attorneyEmail: "atty@firm.com", clientEmail: "ana@mail.com", agreementName: "11-05-26 - Contract - A. PEREZ [CP-1]" });
+    expect(row().status).toBe("sending");
+    expect(row().sent_at).not.toBeNull();
+    expect(stage()).toBe("Atty Reviewing");
+    expect(notes()).toContain("Scheduled contract sent for signature");
+    // Zap 1 can now download it.
+    expect((await fetch(hookBodies[0]!.pdfUrl!)).status).toBe(200);
+
+    // Nothing left to do on the next run.
+    hookBodies = [];
+    r = await runScheduledEsign(db, "shared", { today: "2026-11-10" });
+    expect(r).toMatchObject({ sent: 0, waiting: 0 });
+    expect(hookBodies).toEqual([]);
+  });
+
+  it("keeps it scheduled when Zapier refuses, and tries again", async () => {
+    await schedule();
+    mondayNow.items["555"]!.stage = SCHEDULED;
+    const refuse = async () => { throw new Error("Zapier answered 500"); };
+    const r = await runScheduledEsign(db, "shared", { today: "2026-11-05", send: refuse });
+    expect(r.failed).toEqual([{ agreement: 1, error: "Zapier answered 500" }]);
+    expect(row()).toMatchObject({ status: "scheduled", last_error: "Zapier answered 500" });
+    expect((await runScheduledEsign(db, "shared", { today: "2026-11-05" })).sent).toBe(1);
+  });
+
+  it("cancels when the stage was moved off SCHEDULED by hand", async () => {
+    await schedule();
+    mondayNow.items["555"]!.stage = "Create to sign in office";
+    calls = [];
+    const r = await runScheduledEsign(db, "shared", { today: "2026-11-05" });
+    expect(r).toMatchObject({ sent: 0, canceled: 1 });
+    expect(hookBodies).toEqual([]);
+    expect(row().status).toBe("canceled");
+    expect(notes()).toContain('was not sent: the Contract Stage is now "Create to sign in office"');
+  });
+
+  it("does nothing when Monday can't be read", async () => {
+    await schedule();
+    const down = async () => { throw new Error("Monday is down"); };
+    await expect(runScheduledEsign(db, "shared", { today: "2026-11-05", read: down })).rejects.toThrow("Monday is down");
+    expect(row().status).toBe("scheduled");
+  });
+
+  it("M22 shows the waiting send and can cancel it", async () => {
+    await schedule();
+    const shown = (await (await fetch(`${base}/api/contracts/c1/esign/scheduled`)).json()) as { data: Record<string, unknown> };
+    expect(shown.data).toMatchObject({ sendOn: "2026-11-05", by: "Ana Reyes" });
+    expect((await fetch(`${base}/api/contracts/c1/esign/scheduled`, { method: "DELETE" })).status).toBe(200);
+    expect(row().status).toBe("canceled");
+    expect(((await (await fetch(`${base}/api/contracts/c1/esign/scheduled`)).json()) as { data: unknown }).data).toBeNull();
+    // A canceled one no longer blocks a new send.
+    expect((await send()).status).toBe(200);
+  });
+
+  it("notes once on a SCHEDULED Fee K whose date came with nothing prepared", async () => {
+    db.prepare("UPDATE contracts SET raw_column_values = json_set(raw_column_values, '$.contract_stage', json(?)) WHERE local_id = 'c1'")
+      .run(JSON.stringify({ label: SCHEDULED }));
+    mondayNow.items["555"] = { stage: SCHEDULED, sendBy: "2026-11-05" };
+    expect((await runScheduledEsign(db, "shared", { today: "2026-11-04" })).reminded).toBe(0);
+    expect((await runScheduledEsign(db, "shared", { today: "2026-11-05" })).reminded).toBe(1);
+    expect(notes()).toContain("Send Fee K By date is today, but no contract is scheduled in the app");
+    expect((await runScheduledEsign(db, "shared", { today: "2026-11-06" })).reminded).toBe(0);
+    expect(hookBodies).toEqual([]);
   });
 });

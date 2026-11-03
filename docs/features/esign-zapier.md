@@ -41,6 +41,43 @@ for contracts sent by hand.
 
 One open agreement per Fee K: to resend, recall it in Adobe first.
 
+## Scheduled sends (decided 2026-11-03)
+
+Some contracts must go out on a later date. Monday already holds that date: a
+Fee K with Contract Stage **SCHEDULED - fee k to be sent** (label 103) and
+**(c) Send Fee K By:** (`lookup_mm55y7zr`, a mirror of the Calendaring item's
+**Send Fee K On:**, `date_mm55r8zb`).
+
+The PDF can only be made in the browser (the user's Microsoft 365), so staff
+prepare it ahead:
+
+1. M22 → **Preview PDF** → **Send on scheduled date**. The app reads the Fee K
+   from Monday. It refuses when there is no Send Fee K By date or the date has
+   passed (then use Send for signature). Otherwise it keeps that exact PDF on
+   the server (`esign_agreements.status = 'scheduled'`, `send_on`), moves the
+   stage to SCHEDULED and posts a note on the Fee K and the profile.
+2. Every 15 minutes (7 am–8 pm, firm time) the `esign_scheduled` job re-reads
+   each scheduled Fee K from Monday:
+   - stage no longer SCHEDULED, or the Fee K is gone → **canceled**, with a note
+     (someone took it by hand);
+   - no date, or a date after today → waits. The **live** date counts, so
+     moving Send Fee K On in Calendaring moves the send;
+   - date today or past → **sent** exactly like Send for signature (Zap 1, stage
+     → Atty Reviewing, note), under the preparer's Monday token. The 3-day file
+     link starts at the send (`sent_at`), not when it was prepared.
+   - Zapier refuses → stays scheduled, retried next run, ops alert
+     (`ops_esign_scheduled`).
+3. M22 on a Fee K with a scheduled send shows the date and **Cancel scheduled
+   send** (the PDF is deleted, a note says so, the stage is left as it is).
+
+A Fee K set to SCHEDULED on Monday with **nothing prepared** in the app can't
+be sent (there's no PDF). When its date comes, the job posts **one** note on it
+per date (`esign_schedule_reminders`) saying nothing was sent.
+
+Off unless `ESIGN_SCHEDULED=on` (plus the three Zapier settings). Rules:
+`apps/api/src/esign/scheduled.ts`; runner: `runScheduledEsign` in
+`apps/api/src/routes/esign.ts`.
+
 **File names** (decided 2026-10-29, replacing the 2026-10-15 `Client name -
 Matter - MM-DD-YYYY`): `MM-DD-YY - Matter Contract - F. M. LAST NAMES`, e.g.
 `10-29-26 - Master Hearing Contract - J. C. PEREZ`, from M22's Letter date,
