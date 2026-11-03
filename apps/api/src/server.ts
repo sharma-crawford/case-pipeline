@@ -72,7 +72,7 @@ import { registerContractStepRoutes } from "./routes/contract-step.js";
 import { registerContractFeesRoutes } from "./routes/contract-fees.js";
 import { registerCaseCardWriteRoutes } from "./routes/case-card-write.js";
 import { registerContractDocumentRoutes } from "./routes/contract-document.js";
-import { registerEsignPublicRoutes, registerEsignRoutes } from "./routes/esign.js";
+import { registerEsignPublicRoutes, registerEsignRoutes, runScheduledEsign, scheduledSendsOn } from "./routes/esign.js";
 import { registerClientUploadPublicRoutes, registerClientUploadRoutes } from "./routes/client-uploads.js";
 import { registerUploadChecklistRoutes } from "./routes/upload-checklist.js";
 import { registerBuzonRoutes } from "./routes/buzon.js";
@@ -758,6 +758,7 @@ const server = app.listen(PORT, HOST, () => {
     scheduleLawPaySlack();
     scheduleLawPayMail();
     scheduleFeeKAutofill();
+    scheduleScheduledEsign();
     scheduleTargetDatesDigest();
     scheduleWalCheckpoint();
     // Write this process's Monday call counts to monday_api_calls every minute.
@@ -1201,6 +1202,53 @@ function scheduleFeeKAutofill() {
     { timezone: FIRM_TIMEZONE },
   );
   console.log(`[feek] Auto-fill scheduled — cron "${feeKCron}" (${FIRM_TIMEZONE}), Fee Ks added since ${since}.`);
+}
+
+/**
+ * Scheduled Adobe Sign sends (M22 → Send on scheduled date): every 15 minutes,
+ * send the contracts whose Fee K "Send Fee K By:" date has come, cancel the
+ * ones moved off SCHEDULED, remind on SCHEDULED Fee Ks with nothing prepared.
+ * Off unless ESIGN_SCHEDULED=on (and the Zapier settings). Rules =
+ * esign/scheduled.ts; runner = runScheduledEsign (routes/esign.ts).
+ */
+let esignScheduledInFlight = false;
+
+function scheduleScheduledEsign() {
+  if (!scheduledSendsOn()) {
+    console.log("[esign] Scheduled sends DISABLED (set ESIGN_SCHEDULED=on, with the Zapier settings, to enable).");
+    return;
+  }
+  if (!MONDAY_API_TOKEN) {
+    console.error("[esign] Scheduled sends NOT scheduled: needs MONDAY_API_TOKEN.");
+    return;
+  }
+  const esignCron = process.env.ESIGN_SCHEDULED_CRON ?? "*/15 7-20 * * *";
+  cron.schedule(
+    esignCron,
+    () => {
+      if (esignScheduledInFlight) {
+        console.log("[esign] Scheduled sends skipped — the last run is still going.");
+        return;
+      }
+      esignScheduledInFlight = true;
+      trackRun(usersDb, "esign_scheduled", () => withMondayJob("esign-scheduled", async () => {
+        const r = await runScheduledEsign(db, MONDAY_API_TOKEN);
+        const summary = `${r.sent} sent, ${r.waiting} waiting, ${r.canceled} canceled, ${r.reminded} reminded, ${r.failed.length} failed`;
+        if (r.sent || r.canceled || r.reminded || r.failed.length) console.log(`[esign] scheduled run: ${summary}.`);
+        if (r.failed.length) {
+          inBackground(notifyOps("ops_esign_scheduled", `Scheduled contract send failed: ${r.failed.map((f) => `#${f.agreement} ${f.error}`).join("; ")}`));
+        }
+        return summary;
+      }))
+        .catch((err) => {
+          console.error("[esign] Scheduled sends error:", err);
+          inBackground(notifyOps("ops_esign_scheduled", `Scheduled contract sends failed: ${(err as Error).message}`));
+        })
+        .finally(() => { esignScheduledInFlight = false; });
+    },
+    { timezone: FIRM_TIMEZONE },
+  );
+  console.log(`[esign] Scheduled sends on — cron "${esignCron}" (${FIRM_TIMEZONE}).`);
 }
 
 /**

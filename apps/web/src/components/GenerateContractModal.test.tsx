@@ -19,6 +19,9 @@ const mocks = vi.hoisted(() => ({
   log: vi.fn(),
   tags: ["client_name"] as string[],
   fill: vi.fn(),
+  scheduling: false,
+  scheduled: null as null | Record<string, unknown>,
+  cancel: vi.fn(),
 }));
 
 vi.mock("../api", () => ({
@@ -28,7 +31,9 @@ vi.mock("../api", () => ({
     attorneys: [{ name: "Jane Atty", email: "jane@firm.com" }, { name: "Lucy Betteridge", email: "lucy@firm.com" }],
     contractFor: ["Court"], attorneyFee: 5000, filingFee: null, processingFee: null, hearingType: "Master Hearing", hearingDate: "2026-11-12",
   }),
-  fetchEsignStatus: async () => ({ enabled: true }),
+  fetchEsignStatus: async () => ({ enabled: true, scheduling: mocks.scheduling }),
+  fetchScheduledEsign: async () => mocks.scheduled,
+  cancelScheduledEsign: mocks.cancel,
   fetchFeeKTypes: async () => ({
     feeKTypes: ["I-130 - Petition for Alien Relative", "Master (c)"], boards: [], draft: true,
     rows: [{ feeKType: "I-130 - Petition for Alien Relative", spanish: "Petición de familiar extranjero (I-130)", board: "", feeSheetJob: "",
@@ -79,6 +84,9 @@ beforeEach(() => {
   mocks.convert.mockReset().mockResolvedValue(pdf);
   mocks.send.mockReset().mockResolvedValue({ id: 1, stage: "Atty Reviewing", warning: null });
   mocks.log.mockReset();
+  mocks.scheduling = false;
+  mocks.scheduled = null;
+  mocks.cancel.mockReset().mockResolvedValue(undefined);
   mocks.tags = ["client_name"];
   mocks.fill.mockReset().mockReturnValue(new Blob(["filled"]));
   localStorage.clear();
@@ -110,8 +118,47 @@ describe("M22 preview", () => {
     await flush();
     expect(mocks.convert).toHaveBeenCalledTimes(1); // not made again
     // The standard name goes with it: Adobe's document and the signed copy carry it.
-    expect(mocks.send).toHaveBeenCalledWith("c1", pdf, { attorneyEmail: "jane@firm.com", clientEmail: "ana@mail.com", documentName: "10-15-26 - Court Contract - A. LOPEZ" });
+    expect(mocks.send).toHaveBeenCalledWith("c1", pdf, { attorneyEmail: "jane@firm.com", clientEmail: "ana@mail.com", documentName: "10-15-26 - Court Contract - A. LOPEZ", schedule: false });
     expect(onSent).toHaveBeenCalled();
+    // Scheduling is off on this server: no button for it.
+    expect(button("Send on scheduled date")).toBeUndefined();
+  });
+
+  it("Send on scheduled date sends the same PDF, flagged to wait for the date", async () => {
+    mocks.scheduling = true;
+    mocks.send.mockResolvedValue({ id: 1, stage: "SCHEDULED - fee k to be sent", warning: null, scheduled: true, sendOn: "2026-11-05" });
+    const onSent = vi.fn();
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    await act(async () => { createRoot(host).render(<GenerateContractModal contract={contract} onClose={() => {}} onSent={onSent} />); });
+    await flush();
+    await act(async () => { button("Preview PDF")!.click(); });
+    await flush();
+    await act(async () => { button("Send on scheduled date")!.click(); });
+    await flush();
+    expect(mocks.send).toHaveBeenCalledWith("c1", pdf, expect.objectContaining({ schedule: true, attorneyEmail: "jane@firm.com" }));
+    expect(onSent).toHaveBeenCalledWith(expect.stringContaining("goes to Adobe Sign on Thu, Nov 5"));
+  });
+
+  it("a Fee K with a send waiting shows its date, can cancel it, and has no send buttons", async () => {
+    mocks.scheduling = true;
+    mocks.scheduled = { id: 1, sendOn: "2026-11-05", by: "Ana Reyes", at: "2026-11-03 10:00:00", attorneyEmail: "jane@firm.com", clientEmail: "ana@mail.com", lastError: null };
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    await act(async () => { createRoot(host).render(<GenerateContractModal contract={contract} onClose={() => {}} />); });
+    await flush();
+    expect(document.body.textContent).toContain("Scheduled by Ana Reyes: goes to Adobe Sign on Thu, Nov 5");
+    await act(async () => { button("Preview PDF")!.click(); });
+    await flush();
+    expect(button("Send for signature")).toBeUndefined();
+    expect(button("Send on scheduled date")).toBeUndefined();
+    await act(async () => { button("← Back to edit")!.click(); });
+    await flush();
+    await act(async () => { button("Cancel scheduled send")!.click(); });
+    await flush();
+    expect(mocks.cancel).toHaveBeenCalledWith("c1");
+    expect(document.body.textContent).toContain("Scheduled send canceled.");
   });
 
   it("Back to edit drops the preview", async () => {

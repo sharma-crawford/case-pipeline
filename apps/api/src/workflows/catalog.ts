@@ -180,6 +180,16 @@ export const WORKFLOWS: WorkflowDef[] = [
     },
     history: "esign", doc: "docs/features/esign-zapier.md",
   },
+  {
+    key: "esign_scheduled",
+    name: "Scheduled contract sends",
+    when: "Every 15 minutes during the day",
+    then: "Send contracts prepared with \"Send on scheduled date\" once the Fee K's Send Fee K By date comes; cancel ones moved off SCHEDULED; note SCHEDULED Fee Ks with nothing prepared",
+    group: "payments", kind: "scheduled",
+    schedule: cronOf("ESIGN_SCHEDULED_CRON", "*/15 7-20 * * *", true),
+    enabled: liveSwitch("ESIGN_SCHEDULED", "ZAPIER_ESIGN_HOOK_URL", "ZAPIER_ESIGN_SECRET", "API_URL", "MONDAY_API_TOKEN"),
+    history: "job_runs", opsEvent: "ops_esign_scheduled", doc: "docs/features/esign-zapier.md",
+  },
 
   // ── Client files ───────────────────────────────────────────────────────────
   {
