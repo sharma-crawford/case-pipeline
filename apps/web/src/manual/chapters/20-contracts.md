@@ -6,7 +6,7 @@ summary: From a new Fee K to a signed, paid contract — generate, sign, send pa
 routes: contracts
 code: P14
 for: billing, attorney
-updated: 2026-11-02
+updated: 2026-11-03
 ---
 
 **Contracts** lists every pending Fee K, grouped by **Contract Stage** in its Monday colour. The colour of the age shows how long it has waited (30 and 60 days). Click an attorney to see only theirs. **Missing info** at the top shows contracts that lack a case type, AF, attorney, e-mail or address.
@@ -16,6 +16,7 @@ updated: 2026-11-02
 | Stage | What happens | Who |
 |---|---|---|
 | New | Fee K made (from a consult, or **+ New contract**) | Attorney / billing |
+| SCHEDULED - fee k to be sent | Contract ready, waiting for its **Send Fee K By** date (optional) | Billing, then automatic |
 | Atty Reviewing | Contract generated and sent for signature | Billing |
 | Sent to Client | Attorney signed | Attorney |
 | Needs Payment Link | Client signed | — |
@@ -54,6 +55,22 @@ Either:
 - **Send for signature** in the Generate popup: the contract goes to Adobe Sign, attorney first, then client. The stages move by themselves as each one signs, and the signed copy is saved to the client's E-File.
 - **File names** are date first, then the matter, then the client's initials and last names: *10-29-26 - Master Hearing Contract - J. C. PEREZ*. The signed copy in the E-File adds SIGNED: *10-29-26 - SIGNED Master Hearing Contract - J. C. PEREZ*. Write last names in CAPITALS in the client name so they come out whole.
 - Or sign in Acrobat yourself, and record each step from **⋯**: *Mark sent in Acrobat* → *attorney signed* → *client signed*. Each asks to confirm, then moves the stage and stamps the date on Monday.
+
+### Send it later, on a set date
+
+When a contract must not go out until a certain day, the date is the Fee K's **Send Fee K By** (it comes from **Send Fee K On** on the client's Calendaring item).
+
+1. Make sure the Calendaring item has **Send Fee K On** filled in.
+2. **⋯ → Generate contract…**, fill it in, then **Preview PDF** and check every page.
+3. Click **Send on scheduled date**. The stage becomes *SCHEDULED - fee k to be sent* and a note on the Fee K says the date.
+4. On that date, the app sends this exact PDF to Adobe Sign by itself (attorney first, then the client) and moves the stage to *Atty Reviewing*, like **Send for signature**.
+
+Good to know:
+
+- If **Send Fee K On** moves in Calendaring, the contract goes out on the new date.
+- The button refuses a Fee K with no date, or one whose date has already passed. Use **Send for signature** instead.
+- To stop it, open **⋯ → Generate contract…** and click **Cancel scheduled send**. Moving the stage off *SCHEDULED* on Monday cancels it too. Either way a note says it was not sent.
+- A Fee K set to *SCHEDULED* on Monday without using this button can't go out by itself, because no contract was prepared. When its date comes, the app adds a note to the Fee K saying nothing was sent.
 
 ## Payment links
 

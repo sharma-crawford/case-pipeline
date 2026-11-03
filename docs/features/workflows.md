@@ -33,6 +33,7 @@ Scheduled in `apps/api/src/server.ts` (live data only):
 | `lawpay_slack` | LawPay payments from Slack #payments | `LAWPAY_SLACK` | `*/2 * * * *` | `lawpay_events` (per payment) ❌ |
 | `lawpay_mail` | LawPay receipt e-mails | `LAWPAY_MAIL` | `*/10 * * * *` | same ❌ |
 | `fee_k_autofill` | Fee K auto-fill | `FEE_K_AUTOFILL` | `*/15 7-20 * * *` | audit rows per write ❌ |
+| `esign_scheduled` | Scheduled contract sends | `ESIGN_SCHEDULED` | `*/15 7-20 * * *` | `job_runs` + `esign_agreements` ✅ |
 | `slack_queue` | Queued "consult ready" Slack posts | always | every minute | `slack_queue` rows ✅ |
 | `backup` | Daily database backup | always | `30 5 * * *` | files on disk ❌ |
 | `wal_checkpoint` | Database housekeeping | always | hourly | ❌ (hide by default) |

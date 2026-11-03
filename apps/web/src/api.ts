@@ -669,22 +669,45 @@ export async function fetchContractPrefill(localId: string): Promise<ContractPre
 }
 
 /** Whether this server can send contracts to Adobe Sign (Zapier configured). */
-export async function fetchEsignStatus(): Promise<{ enabled: boolean }> {
+export async function fetchEsignStatus(): Promise<{ enabled: boolean; scheduling?: boolean }> {
   return apiFetch("/api/esign/status");
 }
 
-/** Send the generated PDF to Adobe Sign via Zapier: attorney signs first, then the client. */
+/**
+ * Send the generated PDF to Adobe Sign via Zapier: attorney signs first, then the client.
+ * `schedule`: keep it on the server and send it on the Fee K's "Send Fee K By:" date instead.
+ */
 export async function sendContractForSignature(
   localId: string,
   pdf: Blob,
-  opts: { attorneyEmail: string; clientEmail: string; documentName: string },
-): Promise<{ id: number; stage: string | null; warning: string | null }> {
-  const q = new URLSearchParams(opts);
+  opts: { attorneyEmail: string; clientEmail: string; documentName: string; schedule?: boolean },
+): Promise<{ id: number; stage: string | null; warning: string | null; scheduled?: boolean; sendOn?: string }> {
+  const { schedule, ...rest } = opts;
+  const q = new URLSearchParams({ ...rest, ...(schedule ? { schedule: "1" } : {}) });
   return apiFetch(`/api/contracts/${encodeURIComponent(localId)}/esign?${q}`, {
     method: "POST",
     headers: { "Content-Type": "application/pdf" },
     body: pdf,
   });
+}
+
+export interface ScheduledEsign {
+  id: number;
+  sendOn: string | null;
+  by: string | null;
+  at: string;
+  attorneyEmail: string;
+  clientEmail: string;
+  lastError: string | null;
+}
+
+/** The contract waiting to go out on its Send Fee K By date, if any. */
+export async function fetchScheduledEsign(localId: string): Promise<ScheduledEsign | null> {
+  return apiFetch(`/api/contracts/${encodeURIComponent(localId)}/esign/scheduled`);
+}
+
+export async function cancelScheduledEsign(localId: string): Promise<void> {
+  await apiFetch(`/api/contracts/${encodeURIComponent(localId)}/esign/scheduled`, { method: "DELETE" });
 }
 
 /**

@@ -14,6 +14,11 @@
 //   The PDF waits under data/esign/ behind a random link Zap 1 downloads from
 //   (GET /api/esign/files/:token, no login — the token is the key, valid 3
 //   days). Then the step "sent for signature" (Atty Reviewing) and a note.
+//   With ?schedule=1 the PDF is kept instead and goes out on the Fee K's "Send
+//   Fee K By:" date (stage → SCHEDULED; esign/scheduled.ts has the rules):
+//   runScheduledEsign, every 15 minutes, sends it — or cancels it when the
+//   stage was moved off SCHEDULED. GET / DELETE …/esign/scheduled shows or
+//   cancels one from M22.
 // POST /api/webhooks/zapier/:secret — every Adobe event. events.ts decides;
 //   this applies: the CONTRACT_STEPS write (stage + date), a note on the Fee K,
 //   and for signed / rejected / expired / recalled a Monday notification to
@@ -54,6 +59,12 @@ import {
 } from "../esign/events.js";
 import { notifyMonday, notifySlack } from "../esign/notify.js";
 import { fileSignedContract } from "../esign/efile.js";
+import {
+  SCHEDULED_STAGE, SEND_BY_COLUMN, needsReminder, parseSendBy, planScheduledSend, scheduleRejection, sendDateLabel,
+  type LiveFeeK,
+} from "../esign/scheduled.js";
+import { CONTRACT_STEPS, FEE_K_COLUMN_IDS } from "@case-pipeline/query";
+import { FIRM_TIMEZONE } from "../firm.js";
 
 const ESIGN_DIR = "esign";
 const MAX_PDF_BYTES = 15 * 1024 * 1024;
@@ -66,6 +77,11 @@ export interface EsignConfig {
   hookUrl: string;
   secret: string;
   publicUrl: string;
+}
+
+/** Scheduled sends (Send on scheduled date + the job): off unless ESIGN_SCHEDULED=on, on top of esignConfig. */
+export function scheduledSendsOn(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.ESIGN_SCHEDULED === "on" && !!esignConfig(env);
 }
 
 /** Null = the feature is off (one of the three settings missing). */
@@ -90,6 +106,9 @@ interface AgreementRow {
   sent_by_oid: string | null;
   sent_by_name: string | null;
   sent_by_monday_id: string | null;
+  document_name: string | null;
+  send_on: string | null;
+  sent_at: string | null;
   created_at: string;
 }
 
@@ -115,10 +134,11 @@ export function registerEsignPublicRoutes(app: Express, deps: EsignDeps): void {
   // (Adobe names the document after it).
   app.get("/api/esign/files/:token/:name", (req, res) => {
     const token = String(req.params.token);
+    // A scheduled contract isn't served until it is sent; the 3 days run from then.
     const row = TOKEN_RE.test(token)
-      ? (db.prepare("SELECT id, created_at FROM esign_agreements WHERE file_token = ?").get(token) as { id: number; created_at: string } | undefined)
+      ? (db.prepare("SELECT id, COALESCE(sent_at, created_at) AS sent FROM esign_agreements WHERE file_token = ? AND status NOT IN ('scheduled', 'canceled')").get(token) as { id: number; sent: string } | undefined)
       : undefined;
-    const ageHours = row ? (Date.now() - Date.parse(`${row.created_at.replace(" ", "T")}Z`)) / 3_600_000 : Infinity;
+    const ageHours = row ? (Date.now() - Date.parse(`${row.sent.replace(" ", "T")}Z`)) / 3_600_000 : Infinity;
     const file = path.join(DATA_DIR, ESIGN_DIR, `${token}.pdf`);
     if (!row || ageHours > FILE_LINK_HOURS || !fs.existsSync(file)) {
       res.status(404).json({ error: "Not found" });
@@ -413,7 +433,8 @@ export function registerEsignRoutes(app: Express, deps: EsignDeps): void {
   }
 
   app.get("/api/esign/status", requireAuth, (_req, res) => {
-    res.json({ data: { enabled: !!esignConfig() && !!MONDAY_API_TOKEN } });
+    const enabled = !!esignConfig() && !!MONDAY_API_TOKEN;
+    res.json({ data: { enabled, scheduling: enabled && scheduledSendsOn() } });
   });
 
   app.post(
@@ -424,6 +445,11 @@ export function registerEsignRoutes(app: Express, deps: EsignDeps): void {
       const config = esignConfig();
       if (!config || !MONDAY_API_TOKEN) {
         res.status(503).json({ error: "Sending for signature is not set up on this server" });
+        return;
+      }
+      const schedule = req.query.schedule === "1";
+      if (schedule && !scheduledSendsOn()) {
+        res.status(503).json({ error: "Scheduled sending is not turned on on this server" });
         return;
       }
       const pdf = req.body as unknown;
@@ -457,11 +483,33 @@ export function registerEsignRoutes(app: Express, deps: EsignDeps): void {
         return;
       }
       const open = db.prepare(
-        `SELECT id, status FROM esign_agreements WHERE contract_monday_id = ? AND status IN (${OPEN_STATUSES.map(() => "?").join(",")})`,
-      ).get(contract.mondayId, ...OPEN_STATUSES) as { id: number; status: string } | undefined;
+        `SELECT id, status, send_on FROM esign_agreements WHERE contract_monday_id = ? AND status IN (${OPEN_STATUSES.map(() => "?").join(",")}, 'scheduled')`,
+      ).get(contract.mondayId, ...OPEN_STATUSES) as { id: number; status: string; send_on: string | null } | undefined;
       if (open) {
-        res.status(409).json({ error: "This contract is already out for signature in Adobe Sign. Recall it in Adobe first to send a new one." });
+        res.status(409).json({
+          error: open.status === "scheduled"
+            ? `This contract is already scheduled to send${open.send_on ? ` (Send Fee K By ${open.send_on})` : ""}. Cancel the scheduled send first.`
+            : "This contract is already out for signature in Adobe Sign. Recall it in Adobe first to send a new one.",
+        });
         return;
+      }
+
+      // Scheduling: the date and the stage come from Monday as it is now.
+      let live: LiveFeeK | null = null;
+      if (schedule) {
+        try {
+          live = (await readLiveFeeKs([contract.mondayId])).get(contract.mondayId) ?? null;
+        } catch (err) {
+          console.error("[esign] reading the Fee K for a scheduled send failed:", err);
+        }
+        const refusal = scheduleRejection(live, firmToday())
+          ?? (live && !CONTRACT_STEPS.sent_for_signature.from.includes(live.stage?.trim() || null)
+            ? `Can't schedule from the "${live.stage}" stage`
+            : null);
+        if (refusal) {
+          res.status(live ? 409 : 502).json({ error: refusal });
+          return;
+        }
       }
 
       const token = randomBytes(24).toString("base64url");
@@ -470,31 +518,36 @@ export function registerEsignRoutes(app: Express, deps: EsignDeps): void {
       const senderName = req.user?.name ?? null;
       const id = Number(db.prepare(`
         INSERT INTO esign_agreements
-          (contract_local_id, contract_monday_id, profile_monday_id, client_name, client_email, attorney_email, file_token, status, sent_by_oid, sent_by_name, sent_by_monday_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'sending', ?, ?, ?)
+          (contract_local_id, contract_monday_id, profile_monday_id, client_name, client_email, attorney_email, file_token, status,
+           sent_by_oid, sent_by_name, sent_by_monday_id, document_name, send_on)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         localId, contract.mondayId, contract.profileMondayId, contract.clientName, clientEmail, attorneyEmail, token,
-        req.user?.oid ?? null, senderName, await mondayUserIdOf(req),
+        schedule ? "scheduled" : "sending", req.user?.oid ?? null, senderName, await mondayUserIdOf(req),
+        documentName, live?.sendBy ?? null,
       ).lastInsertRowid);
 
-      const agreementName = agreementNameOf(documentName, contract.clientName, id);
-      const fileBase = safeFileName(documentName ?? agreementName);
-      try {
-        const hook = await fetch(config.hookUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ref: `CP-${id}`,
-            agreementName,
-            pdfUrl: `${config.publicUrl}/api/esign/files/${token}/${encodeURIComponent(fileBase)}.pdf`,
-            fileName: `${fileBase}.pdf`,
-            attorneyEmail,
-            clientEmail,
-            clientName: contract.clientName,
-          }),
-          signal: AbortSignal.timeout(15_000),
+      if (schedule && live?.sendBy) {
+        const stageMoved = await setScheduledStage(db, localId, contract.mondayId, live.stage, writeTokenOptions(req), req.user?.oid ?? null);
+        await postNote(db, {
+          feeKItemId: contract.mondayId, profileItemId: contract.profileMondayId,
+          title: "Contract scheduled for signature",
+          body: `🗓 Contract prepared by ${senderName ?? "staff"} and scheduled: it goes to Adobe Sign on ${sendDateLabel(live.sendBy)} `
+            + `(the Send Fee K By date), attorney (${attorneyEmail}) first, then the client (${clientEmail}). `
+            + "If the date moves in Calendaring, it sends on the new date. Moving the Contract Stage off SCHEDULED cancels it.",
+          localId,
+        }, writeTokenOptions(req), req.user?.oid ?? null);
+        auditFromReq(req, "esign.scheduled", {
+          targetType: "contract", targetId: localId, targetMondayId: contract.mondayId,
+          metadata: { agreement: id, sendOn: live.sendBy, stageMoved },
         });
-        if (!hook.ok) throw new Error(`Zapier answered ${hook.status}`);
+        res.json({ data: { id, scheduled: true, sendOn: live.sendBy, stage: SCHEDULED_STAGE, warning: null } });
+        return;
+      }
+
+      try {
+        await callZap1(config, { id, file_token: token, client_name: contract.clientName, client_email: clientEmail, attorney_email: attorneyEmail }, documentName);
+        db.prepare("UPDATE esign_agreements SET sent_at = datetime('now') WHERE id = ?").run(id);
       } catch (err) {
         console.error("[esign] Zapier hook failed:", err);
         db.prepare("UPDATE esign_agreements SET status = 'send_failed', last_error = ?, updated_at = datetime('now') WHERE id = ?")
@@ -527,4 +580,244 @@ export function registerEsignRoutes(app: Express, deps: EsignDeps): void {
       });
     },
   );
+
+  // M22 shows a waiting scheduled send, and can cancel it.
+  app.get("/api/contracts/:localId/esign/scheduled", requireAuth, (req, res) => {
+    const row = scheduledRowOf(db, String(req.params.localId));
+    res.json({
+      data: row
+        ? { id: row.id, sendOn: row.send_on, by: row.sent_by_name, at: row.created_at, attorneyEmail: row.attorney_email, clientEmail: row.client_email, lastError: row.last_error }
+        : null,
+    });
+  });
+
+  app.delete("/api/contracts/:localId/esign/scheduled", requireAuth, async (req, res) => {
+    const row = scheduledRowOf(db, String(req.params.localId));
+    if (!row) {
+      res.status(404).json({ error: "No scheduled send for this contract" });
+      return;
+    }
+    cancelScheduled(db, row, `canceled by ${req.user?.name ?? "staff"}`);
+    await postNote(db, {
+      feeKItemId: row.contract_monday_id, profileItemId: null, title: "Scheduled contract canceled",
+      body: `🗓 Scheduled contract canceled by ${req.user?.name ?? "staff"} — it was not sent. The Contract Stage is unchanged.`,
+      localId: row.contract_local_id,
+    }, writeTokenOptions(req), req.user?.oid ?? null);
+    auditFromReq(req, "esign.schedule_canceled", {
+      targetType: "contract", targetId: row.contract_local_id, targetMondayId: row.contract_monday_id, metadata: { agreement: row.id },
+    });
+    res.json({ data: { canceled: true } });
+  });
+}
+
+function firmToday(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: FIRM_TIMEZONE });
+}
+
+/** Zap 1: hand the stored PDF to Adobe Sign. Throws when Zapier doesn't take it. */
+async function callZap1(
+  config: EsignConfig,
+  row: Pick<AgreementRow, "id" | "file_token" | "client_name" | "client_email" | "attorney_email">,
+  documentName: string | null,
+): Promise<void> {
+  const agreementName = agreementNameOf(documentName, row.client_name, row.id);
+  const fileBase = safeFileName(documentName ?? agreementName);
+  const hook = await fetch(config.hookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ref: `CP-${row.id}`,
+      agreementName,
+      pdfUrl: `${config.publicUrl}/api/esign/files/${row.file_token}/${encodeURIComponent(fileBase)}.pdf`,
+      fileName: `${fileBase}.pdf`,
+      attorneyEmail: row.attorney_email,
+      clientEmail: row.client_email,
+      clientName: row.client_name,
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!hook.ok) throw new Error(`Zapier answered ${hook.status}`);
+}
+
+/** Fee Ks as Monday has them now: stage + "Send Fee K By:". Absent / archived = not in the map. */
+async function readLiveFeeKs(ids: string[]): Promise<Map<string, LiveFeeK>> {
+  const { fetchItemsByIds } = await import("@case-pipeline/monday");
+  const out = new Map<string, LiveFeeK>();
+  for (const item of await fetchItemsByIds(ids)) {
+    if (item.state && item.state !== "active") continue;
+    const col = (id: string) => item.column_values.find((c) => c.id === id);
+    out.set(String(item.id), {
+      stage: col(FEE_K_COLUMN_IDS.contractStage.id)?.text?.trim() || null,
+      sendBy: parseSendBy(col(SEND_BY_COLUMN)?.display_value ?? col(SEND_BY_COLUMN)?.text),
+    });
+  }
+  return out;
+}
+
+type ScheduledRow = AgreementRow & { last_error: string | null };
+
+function scheduledRowOf(db: DatabaseInstance, localId: string): ScheduledRow | undefined {
+  return db.prepare("SELECT * FROM esign_agreements WHERE contract_local_id = ? AND status = 'scheduled' ORDER BY id DESC LIMIT 1")
+    .get(localId) as ScheduledRow | undefined;
+}
+
+function cancelScheduled(db: DatabaseInstance, row: Pick<AgreementRow, "id" | "file_token">, reason: string): void {
+  db.prepare("UPDATE esign_agreements SET status = 'canceled', last_error = ?, updated_at = datetime('now') WHERE id = ?").run(reason.slice(0, 500), row.id);
+  fs.rmSync(path.join(DATA_DIR, ESIGN_DIR, `${row.file_token}.pdf`), { force: true });
+}
+
+/** Stage → SCHEDULED (unless it already is), on the same rails as a contract step: direct, else queued; local copy updated. */
+async function setScheduledStage(
+  db: DatabaseInstance,
+  localId: string,
+  mondayId: string,
+  current: string | null,
+  tokenOptions: TokenFallbackOptions,
+  authorOid: string | null,
+): Promise<boolean> {
+  if (current?.trim() === SCHEDULED_STAGE) return false;
+  const boardId = getBoardColumnsFor(db, "fee_ks")?.mondayBoardId;
+  if (!boardId) return false;
+  const columnId = FEE_K_COLUMN_IDS.contractStage.id;
+  const value = { label: SCHEDULED_STAGE };
+  try {
+    await withTokenFallback((token) => dataSource.setColumnValues(boardId, mondayId, { [columnId]: value }, token), tokenOptions);
+  } catch (err) {
+    console.error("[esign] SCHEDULED stage write failed; queueing:", err);
+    enqueueWrite(db, {
+      opType: "change_column_json", targetTable: "contracts", targetLocalId: localId, mondayItemId: mondayId, authorOid,
+      payload: { boardId, columnId, value },
+    });
+  }
+  db.prepare(`UPDATE contracts SET raw_column_values = json_set(COALESCE(raw_column_values, '{}'), '$.${FEE_K_COLUMN_IDS.contractStage.key}', json(?)) WHERE local_id = ?`)
+    .run(JSON.stringify(value), localId);
+  return true;
+}
+
+export interface ScheduledRunResult {
+  sent: number;
+  waiting: number;
+  canceled: number;
+  reminded: number;
+  failed: { agreement: number; error: string }[];
+}
+
+export interface ScheduledRunOptions {
+  /** Fee Ks as Monday has them now (tests pass their own). */
+  read?: (ids: string[]) => Promise<Map<string, LiveFeeK>>;
+  /** Zap 1 (tests pass their own). */
+  send?: typeof callZap1;
+  today?: string;
+}
+
+/**
+ * One run of the scheduled-send job (server.ts, every 15 minutes): send the
+ * scheduled contracts whose date has come, cancel the ones taken off SCHEDULED,
+ * and remind once on a SCHEDULED Fee K whose date came with nothing prepared.
+ * Rules: esign/scheduled.ts.
+ */
+export async function runScheduledEsign(
+  db: DatabaseInstance,
+  sharedToken: string | undefined,
+  opts: ScheduledRunOptions = {},
+): Promise<ScheduledRunResult> {
+  const result: ScheduledRunResult = { sent: 0, waiting: 0, canceled: 0, reminded: 0, failed: [] };
+  const config = esignConfig();
+  if (!config) return result;
+  const today = opts.today ?? firmToday();
+  const read = opts.read ?? readLiveFeeKs;
+  const send = opts.send ?? callZap1;
+
+  const scheduled = db.prepare("SELECT * FROM esign_agreements WHERE status = 'scheduled' ORDER BY id").all() as ScheduledRow[];
+  // SCHEDULED on Monday (as of the last sync) with nothing prepared here.
+  const unprepared = db.prepare(`
+    SELECT c.monday_item_id AS mondayId, c.local_id AS localId
+      FROM contracts c
+     WHERE c.deleted_at IS NULL AND c.monday_item_id IS NOT NULL
+       AND json_extract(c.raw_column_values, '$.${FEE_K_COLUMN_IDS.contractStage.key}.label') = ?
+       AND NOT EXISTS (SELECT 1 FROM esign_agreements e WHERE e.contract_monday_id = c.monday_item_id AND e.status = 'scheduled')
+  `).all(SCHEDULED_STAGE) as { mondayId: string; localId: string }[];
+  if (!scheduled.length && !unprepared.length) return result;
+
+  // One Monday read for all of them. An outage throws here, so nothing is canceled on a failed read.
+  const live = await read([...scheduled.map((r) => r.contract_monday_id), ...unprepared.map((u) => u.mondayId)]);
+  const shared: TokenFallbackOptions = { userToken: null, sharedToken };
+  const audit = (action: string, target: { localId: string; mondayId: string }, metadata: Record<string, unknown>) =>
+    recordAudit({
+      actor: { userId: null, email: "system:esign-scheduled" }, action,
+      targetType: "contract", targetId: target.localId, targetMondayId: target.mondayId, metadata,
+    });
+
+  for (const row of scheduled) {
+    const fee = live.get(row.contract_monday_id) ?? null;
+    const plan = planScheduledSend(fee, today);
+    const target = { localId: row.contract_local_id, mondayId: row.contract_monday_id };
+    if (plan.action === "wait") {
+      result.waiting++;
+      continue;
+    }
+    if (plan.action === "cancel") {
+      cancelScheduled(db, row, plan.reason);
+      result.canceled++;
+      audit("esign.schedule_canceled", target, { agreement: row.id, reason: plan.reason });
+      if (fee) {
+        await postNote(db, {
+          feeKItemId: row.contract_monday_id, profileItemId: null, title: "Scheduled contract canceled",
+          body: `🗓 The scheduled contract was not sent: ${plan.reason}. To send it, open Generate contract again.`,
+          localId: row.contract_local_id,
+        }, senderTokenOptions(row, sharedToken), row.sent_by_oid);
+      }
+      continue;
+    }
+    if (!fs.existsSync(path.join(DATA_DIR, ESIGN_DIR, `${row.file_token}.pdf`))) {
+      cancelScheduled(db, row, "the prepared PDF is missing on the server");
+      result.failed.push({ agreement: row.id, error: "prepared PDF missing" });
+      await postNote(db, {
+        feeKItemId: row.contract_monday_id, profileItemId: null, title: "Scheduled contract not sent",
+        body: "⚠️ The scheduled contract could not be sent: the prepared PDF is missing. Open Generate contract and send it again.",
+        localId: row.contract_local_id,
+      }, shared, null);
+      continue;
+    }
+    try {
+      await send(config, row, row.document_name);
+    } catch (err) {
+      // Stays scheduled: the next run tries again.
+      const message = err instanceof Error ? err.message.slice(0, 500) : "error";
+      db.prepare("UPDATE esign_agreements SET last_error = ?, updated_at = datetime('now') WHERE id = ?").run(message, row.id);
+      result.failed.push({ agreement: row.id, error: message });
+      continue;
+    }
+    db.prepare("UPDATE esign_agreements SET status = 'sending', sent_at = datetime('now'), last_error = NULL, updated_at = datetime('now') WHERE id = ?").run(row.id);
+    result.sent++;
+    const tokenOptions = senderTokenOptions(row, sharedToken);
+    const step = await executeContractStep(db, row.contract_local_id, { step: "sent_for_signature" }, {
+      tokenOptions, authorOid: row.sent_by_oid,
+      audit: (action, o) => recordAudit({ actor: { userId: null, email: "system:esign-scheduled" }, action, ...o }),
+    });
+    await postNote(db, {
+      feeKItemId: row.contract_monday_id, profileItemId: row.profile_monday_id,
+      title: "Contract sent for signature",
+      body: `📝 Scheduled contract sent for signature in Adobe Sign (Send Fee K By ${sendDateLabel(plan.sendBy)}; prepared by ${row.sent_by_name ?? "staff"}): `
+        + `attorney (${row.attorney_email}) first, then the client (${row.client_email}).`,
+      localId: row.contract_local_id,
+    }, tokenOptions, row.sent_by_oid);
+    audit("esign.sent", target, { agreement: row.id, scheduled: true, sendBy: plan.sendBy, stageMoved: step.ok });
+  }
+
+  for (const u of unprepared) {
+    const due = needsReminder(live.get(u.mondayId) ?? null, today);
+    if (!due) continue;
+    const fresh = db.prepare("INSERT OR IGNORE INTO esign_schedule_reminders (contract_monday_id, send_on) VALUES (?, ?)").run(u.mondayId, due).changes;
+    if (!fresh) continue;
+    result.reminded++;
+    await postNote(db, {
+      feeKItemId: u.mondayId, profileItemId: null, title: "Scheduled contract not prepared",
+      body: `🗓 This Fee K's Send Fee K By date ${due === today ? "is today" : `was ${sendDateLabel(due)}`}, but no contract is scheduled in the app, so nothing was sent. `
+        + "Contracts → ⋯ → Generate contract → Preview → Send for signature (or Send on scheduled date).",
+      localId: u.localId,
+    }, shared, null);
+    audit("esign.schedule_reminder", { localId: u.localId, mondayId: u.mondayId }, { sendOn: due });
+  }
+  return result;
 }
