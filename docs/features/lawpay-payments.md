@@ -35,6 +35,23 @@ For every payment receipt whose reference is one of ours:
    "Payment link sent" / "Needs Payment Link" — a stage someone set by hand
    (HOLD, Needs Refund…) is left and the note says so. If the move fails, the
    note asks for it by hand.
+5. **By Fee K Type** (2026-11-03, `lawpay/paid-route.ts`). From 2026-10-16
+   step 4 sent every type to Prescheduling; before that, staff routed these by
+   hand:
+   - Master / Detained Master → Court Cases, Habeas / Mandamus / Litigation /
+     Federal Litigation → Litigations: **no Prescheduling**. PS Stage
+     **Completed** + Contract Stage **Create Project**, no group move; Monday's
+     automations then move it to Closed Fee Ks and create the board item.
+   - Bond / Emergency Bond → **Paid needs action**, moved to **Bond Motions**
+     (not Paid Fee Ks). Monday's automation creates the Court Cases item (and,
+     today, the Motions item too — a Monday-side rule).
+   - Both: an empty **It will go to…** (re-read from Monday) is filled first
+     with the board, since Monday's "Create Project" / bond automations only
+     create an item when it names one. A value someone chose is kept.
+   - Mixed types: skip only when all of them skip to the same board; a bond
+     with a Master hearing is a bond; anything else → Prescheduling.
+   - Not the Fee K Types table's `prescheduling` flag: that says whether the
+     client owes documents (Master hearings do).
 
 A receipt the app can't tie to a Fee K → Slack **"Payment to match"**; nothing is
 written to Monday. Refunds are recorded only. A second copy of the same payment

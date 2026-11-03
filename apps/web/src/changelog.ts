@@ -14,6 +14,15 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    date: "2026-11-03",
+    title: "Paid Master hearings, litigation and bonds go to the right place",
+    items: [
+      "A fully paid Master hearing or litigation case no longer waits in Prescheduling: the app marks it Completed, and Monday opens the Court Cases or Litigation item.",
+      "A fully paid bond goes to the Bond Motions group instead of Paid Fee Ks.",
+      "If It will go to… is empty, the app fills it in first.",
+    ],
+  },
+  {
     date: "2026-11-02",
     title: "LawPay payments show on the client's Profile",
     items: [
