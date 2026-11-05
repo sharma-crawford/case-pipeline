@@ -28,7 +28,7 @@ import { dataSource } from "../data-source/index.js";
 import { withTokenFallback } from "../write-auth.js";
 import type { WriteTokenOptions } from "../write-token.js";
 import { enqueueWrite } from "../write-queue/processor.js";
-import { feeKCaseTypeSql, getBoardColumnsFor } from "@case-pipeline/query";
+import { contractAddressSql, feeKCaseTypeSql, getBoardColumnsFor } from "@case-pipeline/query";
 import { usersDb } from "../db/users-db.js";
 import { listStaff, makeStaffResolver, normName, splitPeople, type ResolvedStaff, type StaffMember } from "../staff/roster.js";
 import { FEE_K_ASSISTANT, makeMondayUserByLogin, peopleValue } from "../contract-info.js";
@@ -237,11 +237,9 @@ export function registerContractDocumentRoutes(
     db.prepare(`
       SELECT c.monday_item_id, c.name AS itemName, p.local_id AS profileLocalId,
              p.name AS clientName, p.email,
-             -- The profile's Address, else its Mailing address, else the Fee K's own
-             -- copy (a mirror) — the same order P14's "missing Address" flag uses.
-             COALESCE(NULLIF(TRIM(p.address), ''),
-                      NULLIF(TRIM(json_extract(p.raw_column_values, '$.mailing_address')), ''),
-                      json_extract(c.raw_column_values, '$.address')) AS address,
+             -- Mailing Address (what the Fee K's Address mirrors), else Physical,
+             -- else the Fee K's own copy — the same order P14's "missing Address" flag uses.
+             ${contractAddressSql("p", "c")} AS address,
              json_extract(c.raw_column_values, '$.attorney.label')      AS attorney,
              ${feeKCaseTypeSql()} AS contractFor,
              json_extract(c.raw_column_values, '$.af')                  AS af,

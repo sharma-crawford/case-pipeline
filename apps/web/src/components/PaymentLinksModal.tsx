@@ -32,7 +32,8 @@ import { chargeFor, payMethodOf, paymentEmail, paymentLines, type PayMethod } fr
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Button } from "./ui/button";
 import {
-  formatLawPayAmount, lawPayLink, lawPayReference, partsAddUp, rebalanceParts, splitEvenly, withFeeKCode,
+  appointmentKind, formatLawPayAmount, lawPayLink, lawPayReference, partsAddUp, rebalanceParts, referenceDate,
+  splitEvenly, withAppointmentDate, withFeeKCode,
   FEE_TYPE_LABELS, MAX_PARTS, type FeePart, type FeeType,
 } from "../lib/lawpay";
 import { SendSmsModal } from "./SendSmsModal";
@@ -88,8 +89,15 @@ export function PaymentLinksModal({ contract: c, onMarkSent, onClose }: Props) {
   const [method, setMethod] = useState<PayMethod | null>(payMethodOf(c.paymentMethod));
   const fee = (f: FeeType) => toNumber(amounts[f]);
   const charge = (n: number) => (method === "credit" ? chargeFor(n, "credit") : n);
+  // A hearing / interview payment carries that date (prefilled from Calendaring).
+  const kind = appointmentKind(c.contractFor);
+  const [apptDate, setApptDate] = useState(
+    (kind === "hearing" ? c.nextHearing : kind === "interview" ? c.nextInterview : null) ?? "",
+  );
+  const needsDate = kind !== null && !referenceDate(apptDate);
   // Every reference carries the Fee K's code, so LawPay's receipt names its Fee K.
-  const reference = withFeeKCode(description, c.mondayItemId);
+  // No links until a hearing / interview Fee K has its date.
+  const reference = needsDate ? "" : withFeeKCode(withAppointmentDate(description, kind, apptDate), c.mondayItemId);
 
   // A split fee's parts, when they add up to the fee (else no links for it yet).
   const partsOf = (f: FeeType): number[] | null => {
@@ -243,12 +251,26 @@ export function PaymentLinksModal({ contract: c, onMarkSent, onClose }: Props) {
             <label style={labelStyle} htmlFor="m21-desc">Description (the reference the client sees)</label>
             <input id="m21-desc" value={description} onChange={(e) => setDescription(e.target.value)}
               className="w-full rounded-md px-2 py-1.5 text-sm" style={inputStyle} />
-            {reference !== description.trim() && (
+            {reference && reference !== description.trim() && (
               <p className="text-xs mt-1" style={{ color: "var(--color-ink-faint)" }}>
-                The links add <strong>{reference.slice(description.trim().length).trim()}</strong>: the Fee K&apos;s code, so the payment finds this Fee K by itself.
+                The links add <strong>{reference.slice(description.trim().length).trim()}</strong>
+                {kind ? <>: the {kind} date, and the Fee K&apos;s code so the payment finds this Fee K by itself.</> : <>: the Fee K&apos;s code, so the payment finds this Fee K by itself.</>}
               </p>
             )}
           </div>
+
+          {kind && (
+            <div>
+              <label style={labelStyle} htmlFor="m21-appt-date">{kind === "hearing" ? "Hearing date" : "Interview date"} (goes in the reference)</label>
+              <input id="m21-appt-date" type="date" value={apptDate} onChange={(e) => setApptDate(e.target.value)}
+                className="rounded-md px-2 py-1.5 text-sm" style={inputStyle} />
+              {needsDate && (
+                <p className="text-xs mt-1" style={{ color: "var(--color-ink-muted)" }}>
+                  No {kind} on Calendaring for this client. Enter the date to make the links.
+                </p>
+              )}
+            </div>
+          )}
 
           <fieldset>
             <legend style={labelStyle}>How the client pays{c.paymentMethod ? <span style={{ fontWeight: 400 }}> · Monday: {c.paymentMethod}</span> : null}</legend>
@@ -371,7 +393,7 @@ export function PaymentLinksModal({ contract: c, onMarkSent, onClose }: Props) {
             <p className="text-sm" style={{ color: "var(--color-ink-muted)" }}>Pick how the client pays to e-mail the links.</p>
           )}
 
-          {method !== "cash" && ready.length === 0 && !unbalanced.length && (
+          {method !== "cash" && ready.length === 0 && !unbalanced.length && !needsDate && (
             <p className="text-sm" style={{ color: "var(--color-ink-faint)" }}>Enter a description and at least one amount.</p>
           )}
           {error && <p className="text-sm" style={{ color: "var(--urgency-overdue)" }}>{error}</p>}

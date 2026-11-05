@@ -14,6 +14,7 @@ import type { WaitLevel } from "./prescheduling";
 import { readTextingContact, type TextingContact } from "./client";
 import { makeStaffNames, type StaffResolver } from "./staff-names";
 import { feeKCaseTypeSql } from "./fee-k-case-type";
+import { contractAddressSql } from "./profile-address";
 
 // =============================================================================
 // Types
@@ -66,6 +67,13 @@ export interface PendingContract {
    * e-mail the client signed with, which the links go to.
    */
   signedInApp: { clientEmail: string } | null;
+  /**
+   * The client's next hearing / USCIS interview on or after today, from
+   * Calendaring (YYYY-MM-DD). M21 puts it in the LawPay reference of a hearing
+   * or interview Fee K (2026-11-05). Null when none is calendared.
+   */
+  nextHearing: string | null;
+  nextInterview: string | null;
 }
 
 /**
@@ -261,6 +269,40 @@ export function missingFeeKFields(f: {
   return MISSING_FIELDS.filter((k) => empty[k]);
 }
 
+/** Hearing types on Calendaring's Type column (same set as calendar.ts). */
+const HEARING_TYPES = ["Master", "Trial", "Bond", "Detained"];
+
+/**
+ * Each client's first hearing and first USCIS interview on or after `today`,
+ * from Calendaring — one query for all of them. Hearings: Type Master / Trial /
+ * Bond / Detained → Hearing Date; interviews: a USCIS Notice Type naming an
+ * INTERVIEW → Interview Date (the rules calendar.ts uses).
+ */
+export function upcomingByProfile(db: Database, profileIds: (string | null)[], today: string) {
+  const ids = [...new Set(profileIds.filter((id): id is string => !!id))];
+  const hearing = new Map<string, string>();
+  const interview = new Map<string, string>();
+  if (ids.length === 0) return { hearing, interview };
+  const rows = db.prepare(`
+    SELECT profile_local_id AS profileLocalId,
+           MIN(CASE WHEN json_extract(column_values, '$.type.label') IN (${HEARING_TYPES.map(() => "?").join(",")})
+                     AND substr(json_extract(column_values, '$.hearing_date_calendaring.date'), 1, 10) >= ?
+                    THEN substr(json_extract(column_values, '$.hearing_date_calendaring.date'), 1, 10) END) AS hearing,
+           MIN(CASE WHEN upper(coalesce(json_extract(column_values, '$.uscis_notice_type.labels'), '')) LIKE '%INTERVIEW%'
+                     AND substr(json_extract(column_values, '$.interview_date.date'), 1, 10) >= ?
+                    THEN substr(json_extract(column_values, '$.interview_date.date'), 1, 10) END) AS interview
+    FROM board_items
+    WHERE board_key = 'calendaring' AND deleted_at IS NULL
+      AND profile_local_id IN (${ids.map(() => "?").join(",")})
+    GROUP BY profile_local_id
+  `).all(...HEARING_TYPES, today, today, ...ids) as { profileLocalId: string; hearing: string | null; interview: string | null }[];
+  for (const r of rows) {
+    if (r.hearing) hearing.set(r.profileLocalId, r.hearing);
+    if (r.interview) interview.set(r.profileLocalId, r.interview);
+  }
+  return { hearing, interview };
+}
+
 export function getPendingContracts(db: Database, options: PendingContractsOptions = {}): PendingContractsResult {
   const today = options.today ?? new Date().toISOString().slice(0, 10);
   // 7 / 14 was tried first: most pending contracts are 30+ days old, so
@@ -290,7 +332,7 @@ export function getPendingContracts(db: Database, options: PendingContractsOptio
       -- The Fee K mirrors these from the profile; the profile's own copy is
       -- read too, so an edit made from M11 / M25 counts before the next sync.
       COALESCE(NULLIF(TRIM(p.email), ''), json_extract(c.raw_column_values, '$.e_mail'))     AS email,
-      COALESCE(NULLIF(TRIM(p.address), ''), NULLIF(TRIM(json_extract(p.raw_column_values, '$.mailing_address')), ''), json_extract(c.raw_column_values, '$.address')) AS address,
+      ${contractAddressSql("p", "c")} AS address,
       NULLIF(TRIM(p.phone), '') AS phone,
       p.raw_column_values       AS profileRaw,
       json_extract(c.raw_column_values, '$.payment_method.labels[0]')   AS paymentMethod,
@@ -301,6 +343,8 @@ export function getPendingContracts(db: Database, options: PendingContractsOptio
     LEFT JOIN profiles p ON p.local_id = c.profile_local_id
     WHERE c.group_title = ? AND c.deleted_at IS NULL
   `).all(PENDING_FEE_KS_GROUP) as RawRow[];
+
+  const upcoming = upcomingByProfile(db, rows.map((r) => r.clientLocalId), today);
 
   const contracts: PendingContract[] = rows.map((r) => {
     const from = r.sentOn ?? r.addedOn;
@@ -337,6 +381,8 @@ export function getPendingContracts(db: Database, options: PendingContractsOptio
       clientContact: readTextingContact(r.profileRaw),
       paymentMethod: r.paymentMethod?.trim() || null,
       signedInApp: r.signedClientEmail ? { clientEmail: r.signedClientEmail } : null,
+      nextHearing: (r.clientLocalId && upcoming.hearing.get(r.clientLocalId)) || null,
+      nextInterview: (r.clientLocalId && upcoming.interview.get(r.clientLocalId)) || null,
     };
   });
 

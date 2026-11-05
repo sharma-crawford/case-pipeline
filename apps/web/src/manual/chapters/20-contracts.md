@@ -6,7 +6,7 @@ summary: From a new Fee K to a signed, paid contract — generate, sign, send pa
 routes: contracts
 code: P14
 for: billing, attorney
-updated: 2026-11-03
+updated: 2026-11-05
 ---
 
 **Contracts** lists every pending Fee K, grouped by **Contract Stage** in its Monday colour. The colour of the age shows how long it has waited (30 and 60 days). Click an attorney to see only theirs. **Missing info** at the top shows contracts that lack a case type, AF, attorney, e-mail or address.
@@ -53,6 +53,9 @@ When the attorney has to file a pro hac vice motion (Rekha sets the fee with the
 Either:
 
 - **Send for signature** in the Generate popup: the contract goes to Adobe Sign, attorney first, then client. The stages move by themselves as each one signs, and the signed copy is saved to the client's E-File.
+  - Pick **How the client pays** next to the signers. It starts from the Fee K's Payment Method.
+  - When you send, what is on the screen is taken as the newest: the client's **e-mail** and **address** go to the Profile (the address to **Mailing Address**, the one the Fee K shows), and the **AF / FF / PF** and **payment method** go to the Fee K, replacing what Monday had. Empty fields are left alone. If Monday doesn't take it, the popup says so — fix it with **Edit contract…**.
+- The address on the Generate popup and in **Edit contract…** is the Profile's **Mailing Address**, else its Physical Address.
 - **File names** are date first, then the matter, then the client's initials and last names: *10-29-26 - Master Hearing Contract - J. C. PEREZ*. The signed copy in the E-File adds SIGNED: *10-29-26 - SIGNED Master Hearing Contract - J. C. PEREZ*. Write last names in CAPITALS in the client name so they come out whole.
 - Or sign in Acrobat yourself, and record each step from **⋯**: *Mark sent in Acrobat* → *attorney signed* → *client signed*. Each asks to confirm, then moves the stage and stamps the date on Monday.
 
@@ -78,6 +81,8 @@ Good to know:
 2. One LawPay link per fee: AF and PF go to **Operating**, FF to **Trust**. Check the description and amounts.
 3. **Text links to client** (or e-mail them, bilingual). Credit card adds 3% per link.
 4. **Mark sent** sets *Payment Link Sent On*. A live text marks it sent for you.
+
+**Hearing and interview payments** (Master, Trial, Trial Prep, Interview Prep): a **Hearing date** or **Interview date** box appears. It starts from the client's next hearing or USCIS interview on Calendaring, and the date goes into the reference (for example *… HEARING 11/20/2026*). If nothing is on Calendaring, type the date — there are no links until you do.
 
 When the client pays, the app reads LawPay's receipt, adds a note to the Fee K and to the client's Profile (its **Updates** and **Emails & Activities**), tells whoever sent the links, and — when every fee is paid — moves it to **Paid Fee Ks** with stage *Paid needs action*.
 

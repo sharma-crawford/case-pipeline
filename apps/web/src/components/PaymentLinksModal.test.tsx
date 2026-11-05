@@ -179,3 +179,34 @@ describe("PaymentLinksModal → Email links to client (contracts signed in the a
     expect(mocks.mail[0]!.html).not.toContain("surcharge");
   });
 });
+
+describe("PaymentLinksModal → hearing / interview date in the reference", () => {
+  const render = async (c: PendingContract) => {
+    const root = createRoot(document.body.appendChild(document.createElement("div")));
+    await act(async () => { root.render(<PaymentLinksModal contract={c} onClose={() => {}} />); });
+  };
+  const setDate = async (value: string) => {
+    const input = document.getElementById("m21-appt-date") as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    await act(async () => { setter.call(input, value); input.dispatchEvent(new Event("input", { bubbles: true })); });
+  };
+
+  it("a hearing Fee K starts from the Calendaring date and puts it in every link", async () => {
+    await render({ ...contract, contractFor: ["Master (c)"], nextHearing: "2026-11-20" } as unknown as PendingContract);
+    expect((document.getElementById("m21-appt-date") as HTMLInputElement).value).toBe("2026-11-20");
+    expect(document.body.innerHTML).toContain("HEARING%2011%2F20%2F2026%20-%20AF%205000");
+  });
+
+  it("no date calendared → no links until staff type it", async () => {
+    await render({ ...contract, contractFor: ["Interview Prep + Rep"], nextInterview: null } as unknown as PendingContract);
+    expect(document.body.textContent).toContain("No interview on Calendaring");
+    expect(document.body.innerHTML).not.toContain("secure.lawpay.com");
+    await setDate("2026-12-01");
+    expect(document.body.innerHTML).toContain("INTERVIEW%2012%2F01%2F2026%20-%20AF%205000");
+  });
+
+  it("other Fee K Types have no date field", async () => {
+    await render({ ...contract, contractFor: ["I-130 - Petition for Alien Relative"] } as unknown as PendingContract);
+    expect(document.getElementById("m21-appt-date")).toBeNull();
+  });
+});

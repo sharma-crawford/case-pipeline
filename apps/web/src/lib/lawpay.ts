@@ -49,6 +49,37 @@ export function withFeeKCode(description: string, mondayItemId: string | null | 
   return !code || !d || new RegExp(`\\b${code}\\b`, "i").test(d) ? d : `${d} ${code}`;
 }
 
+// --- Hearing / interview date ------------------------------------------------
+// A hearing or interview payment carries that date in its reference (asked for
+// 2026-11-05), so whoever reads the LawPay receipt knows which hearing it paid
+// for: "ANA LOPEZ MASTER (C) HEARING 11/20/2026 K3F9ZQ1 - AF 800". It goes
+// before the Fee K code, which events.ts reads from the END of the description.
+
+export type AppointmentKind = "hearing" | "interview";
+
+/** Whether the Fee K Type(s) are a hearing or an interview payment; null otherwise. */
+export function appointmentKind(feeKTypes: string[]): AppointmentKind | null {
+  const all = feeKTypes.join(" | ");
+  // Master (c), Detained Master (c), Trial (c), Trial Prep (c), DETAINED TP + T (c).
+  if (/\b(master|trial|tp)\b/i.test(all)) return "hearing";
+  if (/\binterview\b/i.test(all)) return "interview";
+  return null;
+}
+
+/** "2026-11-20" → "11/20/2026"; null when not a date. */
+export function referenceDate(iso: string | null | undefined): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso ?? "");
+  return m ? `${m[2]}/${m[3]}/${m[1]}` : null;
+}
+
+/** The description with "HEARING mm/dd/yyyy" / "INTERVIEW mm/dd/yyyy" at the end (once). */
+export function withAppointmentDate(description: string, kind: AppointmentKind | null, iso: string | null | undefined): string {
+  const d = description.trim();
+  const date = referenceDate(iso);
+  if (!kind || !date || !d || d.includes(date)) return d;
+  return `${d} ${kind.toUpperCase()} ${date}`;
+}
+
 /** Part `n` of `of` of a split fee. */
 export interface FeePart { n: number; of: number }
 

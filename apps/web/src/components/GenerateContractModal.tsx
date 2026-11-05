@@ -43,6 +43,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   cancelScheduledEsign, fetchContractPrefill, fetchEsignStatus, fetchFeeKTypes, fetchScheduledEsign, logContractGenerated, sendContractForSignature,
+  updateContract, FEE_K_PAYMENT_METHODS,
 } from "../api";
 import type { PendingContract, ScheduledEsign } from "../api";
 import { useAuth } from "../auth/useAuth";
@@ -85,6 +86,32 @@ const afOf = (f: ContractInput) => {
   const af = f.attorneyFee ?? (f.trialPrepFee !== null || f.trialFee !== null ? trialTotalOf(f) : null);
   return f.proHacVice && af !== null ? af + proHacViceFeeOf(f) : af;
 };
+/**
+ * On Send for signature, what was typed is taken as the newest (2026-11-05): the
+ * client's e-mail and Mailing address go to the Profile, AF / FF / PF and the
+ * Payment Method to the Fee K — replacing Monday's. Empty fields are left alone.
+ * Returns a warning to show, or null when saved (or nothing changed).
+ */
+export async function saveToMonday(localId: string, f: ContractInput, paymentMethod: string): Promise<string | null> {
+  const address = [f.address.trim(), f.cityStateZip.trim()].filter(Boolean).join(", ");
+  const af = afOf(f);
+  const fees = Object.fromEntries(
+    ([["af", af], ["ff", f.filingFee], ["pf", f.postageFee]] as const).filter(([, v]) => v !== null),
+  );
+  try {
+    const r = await updateContract(localId, {
+      onSend: true,
+      ...(Object.keys(fees).length ? { fees } : {}),
+      ...(f.email.trim() ? { email: f.email.trim() } : {}),
+      ...(address ? { address } : {}),
+      ...(paymentMethod ? { paymentMethod } : {}),
+    }, {});
+    return r.pending ? "Monday is slow: the e-mail, address, fees and payment method will be saved there in a few minutes." : null;
+  } catch (e) {
+    return `The e-mail, address, fees and payment method were NOT saved to Monday (${e instanceof Error ? e.message : "error"}) — fix them with Edit contract.`;
+  }
+}
+
 /** Federal districts the firm files habeas petitions in most; any other can be typed. */
 const DISTRICTS = ["Western District of Missouri", "Eastern District of Missouri", "District of Kansas"];
 
@@ -190,6 +217,10 @@ export function GenerateContractModal({ contract: c, onClose, onSent }: Props) {
   const [attorneyEmail, setAttorneyEmail] = useState("");
   // Who can sign (active roster attorneys + e-mails), from the pre-fill.
   const [attorneys, setAttorneys] = useState<{ name: string; email: string }[]>([]);
+  /** Payment Method, saved to the Fee K on Send for signature (with the e-mail, address and fees). */
+  const [payMethod, setPayMethod] = useState(
+    FEE_K_PAYMENT_METHODS.find((m) => m.toLowerCase() === (c.paymentMethod ?? "").trim().toLowerCase()) ?? "",
+  );
   const [error, setError] = useState<string | null>(null);
   const [needsConsent, setNeedsConsent] = useState(false);
   const [done, setDone] = useState<string | null>(null);
@@ -429,13 +460,15 @@ export function GenerateContractModal({ contract: c, onClose, onSent }: Props) {
         attorneyEmail: attorneyEmail.trim(), clientEmail: input.email.trim(), documentName: preview.name, schedule: later,
       });
       void logContractGenerated(c.localId, { template: picked.name, format: "pdf", attorneyFee: afOf(input), filingFee: input.filingFee });
+      // What was typed here is the newest: it goes to Monday (the contract is already sent if this fails).
+      const saved = await saveToMonday(c.localId, input, payMethod);
       // Sent (or scheduled): nothing left to resume.
       dirty.current = false;
       clearDraft(c.localId);
       const msg = res.scheduled
         ? `${c.clientName}: scheduled — goes to Adobe Sign on ${res.sendOn ? sendOnLabel(res.sendOn) : "the Send Fee K By date"} · stage → ${res.stage}`
         : `${c.clientName}: sent to Adobe Sign (attorney first, then the client)${res.stage ? ` · stage → ${res.stage}` : ""}`;
-      if (res.warning) setDone(`Sent to Adobe Sign. ${res.warning}`);
+      if (res.warning || saved) setDone([`Sent to Adobe Sign.`, res.warning, saved].filter(Boolean).join(" "));
       else { onSent?.(msg); onClose(); }
     } catch (e) {
       if (e instanceof GraphConsentRequiredError) setNeedsConsent(true);
@@ -867,7 +900,17 @@ export function GenerateContractModal({ contract: c, onClose, onSent }: Props) {
                   <input id="m22-client-email" type="email" className={inputClass} style={inputStyle}
                     value={input.email} onChange={(e) => set("email", e.target.value)} />
                 </Field>
+                <Field id="m22-pay-method" label="How the client pays">
+                  <select id="m22-pay-method" className={inputClass} style={inputStyle} value={payMethod}
+                    onChange={(e) => setPayMethod(e.target.value)}>
+                    <option value="">Not set</option>
+                    {FEE_K_PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                </Field>
               </div>
+              <p className="text-xs" style={{ color: "var(--color-ink-faint)" }}>
+                When you send, the client&apos;s e-mail, address, fees and payment method on this screen are saved to Monday, replacing what is there.
+              </p>
               {file.check.signTags.length === 0 && (
                 <p className="text-xs rounded p-2" style={{ background: "var(--color-amber-light)", color: "var(--color-ink)" }}>
                   This template has no Adobe signing tags, so Adobe will add a signature page at the end instead of using the

@@ -95,6 +95,16 @@ the client): `<DESCRIPTION> - <AF|PF|FF> <AMOUNT>`, e.g. `ANA LOPEZ I-212 - AF 4
    pending but the client's Fee K is already **Paid / Closed** = staff handled
    it: recorded quietly (`already_closed`), no alert.
 
+**Hearing / interview date** (2026-11-05): for a hearing Fee K Type (Master,
+Trial, Trial Prep, TP + T) or an interview one (Interview Prep …), M21 adds
+`HEARING mm/dd/yyyy` / `INTERVIEW mm/dd/yyyy` before the Fee K code —
+`ANA LOPEZ MASTER (C) HEARING 11/20/2026 K8F2XQ1 - AF 800` — so the receipt says
+which hearing was paid. The date starts from the client's next hearing / USCIS
+interview on Calendaring (`upcomingByProfile` in
+`libs/query/src/pending-contracts.ts`); staff can change it, and there are no
+links until it is set. `appointmentKind` / `withAppointmentDate` in
+`apps/web/src/lib/lawpay.ts`. The matching rules above are unchanged.
+
 "Every fee paid" = every fee among the links handed out for that Fee K; with none
 recorded, its AF / FF / PF on Monday. Rules: `apps/api/src/lawpay/events.ts`.
 

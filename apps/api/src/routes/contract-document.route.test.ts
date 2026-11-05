@@ -128,12 +128,15 @@ describe("contract pre-fill: the client's address", () => {
     db.prepare("UPDATE profiles SET address = ?, raw_column_values = ? WHERE local_id = 'p1'")
       .run(address, JSON.stringify(mailing ? { mailing_address: mailing } : {}));
 
-  it("takes the profile's Address, else its Mailing address, else the Fee K's copy", async () => {
+  it("takes the profile's Mailing address, else its Physical Address, else the Fee K's copy", async () => {
     db.prepare(
       `INSERT INTO contracts (batch_id, local_id, monday_item_id, profile_local_id, name, raw_column_values) VALUES (1, 'c1', '555', 'p1', 'Fee K', ?)`,
     ).run(JSON.stringify({ address: "9 Fee K Rd, Olathe, KS 66061" }));
 
     setProfile("1 Main St, Topeka, KS 66603", "2 Mail Ave, Lawrence, KS 66044");
+    expect(await prefillAddress()).toMatchObject({ address: "2 Mail Ave, Lawrence, KS 66044", street: "2 Mail Ave", cityStateZip: "Lawrence, KS 66044" });
+
+    setProfile("1 Main St, Topeka, KS 66603", " ");
     expect(await prefillAddress()).toMatchObject({ address: "1 Main St, Topeka, KS 66603", street: "1 Main St", cityStateZip: "Topeka, KS 66603" });
 
     setProfile(" ", "554 Oakland AveKansas City, KS 66101");

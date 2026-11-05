@@ -1,5 +1,28 @@
 import { describe, it, expect } from "vitest";
-import { lawPayLink, formatLawPayAmount, partsAddUp, rebalanceParts, splitEvenly } from "./lawpay";
+import {
+  appointmentKind, lawPayLink, formatLawPayAmount, partsAddUp, rebalanceParts, referenceDate, splitEvenly, withAppointmentDate,
+} from "./lawpay";
+
+describe("hearing / interview date in the reference", () => {
+  it("knows hearing and interview Fee K Types", () => {
+    for (const t of ["Master (c)", "Detained Master (c)", "Trial (c)", "Trial Prep  (c)", "DETAINED TP + T (c)"]) {
+      expect(appointmentKind([t])).toBe("hearing");
+    }
+    expect(appointmentKind(["Interview Prep + Rep"])).toBe("interview");
+    expect(appointmentKind(["Interview Prep Only"])).toBe("interview");
+    expect(appointmentKind(["N-336 - Request for a Hearing Denied N400"])).toBeNull();
+    expect(appointmentKind(["I-130 - Petition for Alien Relative"])).toBeNull();
+    expect(appointmentKind([])).toBeNull();
+  });
+  it("adds the date once, as mm/dd/yyyy", () => {
+    expect(referenceDate("2026-11-20")).toBe("11/20/2026");
+    expect(referenceDate("")).toBeNull();
+    expect(withAppointmentDate("Ana Lopez Master (c)", "hearing", "2026-11-20")).toBe("Ana Lopez Master (c) HEARING 11/20/2026");
+    expect(withAppointmentDate("Ana Lopez interview", "interview", "2026-12-01")).toBe("Ana Lopez interview INTERVIEW 12/01/2026");
+    expect(withAppointmentDate("Ana Lopez 11/20/2026", "hearing", "2026-11-20")).toBe("Ana Lopez 11/20/2026");
+    expect(withAppointmentDate("Ana Lopez I-130", null, "2026-11-20")).toBe("Ana Lopez I-130");
+  });
+});
 
 describe("lawPayLink", () => {
   it("matches the firm's script for an attorney fee", () => {

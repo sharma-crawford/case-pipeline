@@ -580,3 +580,16 @@ Until now every text was click-to-send (M28). The Buzón (the client upload link
 - **Bookkeeping after a Monday success never fails the op.** The `create_item` reconcile and the `client_updates` id attach each catch their own errors, so a local DB error can't send a write that already landed back for a retry.
 
 **Revisit if**: duplicate notes after restarts show up in practice (then store an idempotency marker per op), or a write type needs the in-flight window closed.
+
+---
+
+## 2026-11-05 — Contracts: Mailing Address, and Send for signature saves what was typed
+
+**Context**: Staff saw e-mails and addresses "not showing properly" on M22 Generate contract. Production check (45 pending Fee Ks): every Fee K has a profile and e-mails match the Fee K's mirror (44 of 45), but the Fee K's **Address** mirror shows the Profile's **Mailing Address** (`physical_address8__1`), while the app read **Physical Address** (`text_mkrkrsgj`) first — different on 18 of 45 — and wrote Physical, which the Fee K never shows. The Profile also has **E-mail 2** (`email_mm263d18`, mirrored on the Fee K), which the app does not read.
+
+**Decision**:
+- **Read and write Mailing.** Contracts (P14, M22, M25, M11 / M2) read Mailing, else Physical, else the Fee K's mirror (`contractAddressSql`); the app writes Mailing (`PROFILE_CONTACT.address`). Physical is left alone.
+- **Send for signature saves what was typed, replacing Monday** (Rafael, 2026-11-05: "the info we input on the generate a contract view is the newest and true"): e-mail + Mailing address on the Profile, AF / FF / PF + Payment Method on the Fee K, through M25's route (`PATCH /api/contracts/:id/fees`, `onSend: true`, no stale check). Only on send — a download or preview writes nothing. Empty fields are not written. A failed save doesn't undo the send; the popup says to fix it with Edit contract.
+- Resumed drafts keep what they hold (not refreshed from Monday) — asked, kept as is.
+
+**Revisit if**: staff start using E-mail 2 as the main e-mail, or Physical Address is the one that should go on contracts.

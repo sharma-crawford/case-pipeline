@@ -1022,6 +1022,9 @@ export async function recordContractStep(
 
 export type ContractFees = { af: number | null; ff: number | null; pf: number | null };
 
+/** The Fee K's Payment Method labels, as on Monday (the API refuses any other). */
+export const FEE_K_PAYMENT_METHODS = ["CREDIT Card - Surcharge Applies", "DEBIT Card", "Cash", "SPLIT PAYMENTS"] as const;
+
 /** Change a Fee K's AF / FF / PF and/or its case type ("Fee K Type"; one
  * label, replacing what was there; `newCaseType` = add it to the dropdown).
  * Only what changed is written; a null fee clears. `from` is what the user
@@ -1036,7 +1039,13 @@ export async function fetchContractInfo(profileLocalId?: string | null): Promise
  * e-mail / address on the client's profile. `from` = what the user saw (409 if changed since). */
 export async function updateContract(
   localId: string,
-  change: { fees?: Partial<ContractFees>; caseType?: string; newCaseType?: boolean; attorney?: string; email?: string; address?: string },
+  change: {
+    fees?: Partial<ContractFees>; caseType?: string; newCaseType?: boolean; attorney?: string; email?: string; address?: string;
+    /** One of FEE_K_PAYMENT_METHODS. */
+    paymentMethod?: string;
+    /** M22 Send for signature: save what was typed; "nothing changed" is not an error. */
+    onSend?: boolean;
+  },
   from: Partial<ContractFees> & { caseType?: string[]; attorney?: string[]; email?: string; address?: string },
 ): Promise<{ localId: string; fees: Partial<ContractFees>; caseType?: string; attorney?: string; pending: boolean }> {
   return apiFetch(`/api/contracts/${encodeURIComponent(localId)}/fees`, {

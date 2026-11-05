@@ -21,10 +21,15 @@ import { getWorkspaceUsers } from "./staff/workspace-users.js";
 
 /** Fee Ks "Attorney" (People) — config/boards.yaml fee_ks.attorney. */
 export const FEE_K_ATTORNEY = { id: "deal_owner", key: "attorney" } as const;
-/** Profile columns the Fee K mirrors (config/boards.yaml profiles.email / physical_address). */
+/**
+ * Profile columns the Fee K mirrors (config/boards.yaml profiles.email /
+ * mailing_address). The Fee K's Address mirror shows MAILING Address, not
+ * Physical, so that is the one the app writes (2026-11-05; before, it wrote
+ * Physical, which the Fee K never showed). Read with contractAddressSql.
+ */
 export const PROFILE_CONTACT = {
   email: { id: "email__1", key: "email", label: "E-mail" },
-  address: { id: "text_mkrkrsgj", key: "physical_address", label: "Address" },
+  address: { id: "physical_address8__1", key: "mailing_address", label: "Address" },
 } as const;
 export type ContactKey = keyof typeof PROFILE_CONTACT;
 
@@ -156,5 +161,9 @@ export function planProfileContact(
 /** Apply a profile contact plan to the local mirror (P14, M22 pre-fill see it at once). */
 export function applyProfileContactLocally(db: DatabaseInstance, profileLocalId: string, local: ProfileContactPlan["local"]): void {
   if (local.email !== undefined) db.prepare("UPDATE profiles SET email = ? WHERE local_id = ?").run(local.email, profileLocalId);
-  if (local.address !== undefined) db.prepare("UPDATE profiles SET address = ? WHERE local_id = ?").run(local.address, profileLocalId);
+  // Mailing Address lives in raw_column_values (profiles.address is Physical, left alone).
+  if (local.address !== undefined) {
+    db.prepare("UPDATE profiles SET raw_column_values = json_set(COALESCE(raw_column_values, '{}'), '$.mailing_address', ?) WHERE local_id = ?")
+      .run(local.address, profileLocalId);
+  }
 }

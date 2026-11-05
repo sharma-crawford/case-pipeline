@@ -79,7 +79,8 @@ beforeEach(() => {
   col.run("fee_ks", "B-FK", "link_p", "Profile", "board_relation", null, 4);
   col.run("fee_ks", "B-FK", "deal_owner", "Attorney", "people", null, 5);
   col.run("profiles", "B-PROF", "email__1", "Email", "email", null, 0);
-  col.run("profiles", "B-PROF", "text_mkrkrsgj", "Physical Address", "text", null, 1);
+  col.run("profiles", "B-PROF", "physical_address8__1", "Mailing Address", "text", null, 1);
+  col.run("fee_ks", "B-FK", "dropdown_mm7v5eeb", "Payment Method", "dropdown", JSON.stringify([{ label: "CREDIT Card - Surcharge Applies" }, { label: "DEBIT Card" }, { label: "Cash" }, { label: "SPLIT PAYMENTS" }]), 1);
 
   const app = express();
   app.use(express.json());
@@ -137,14 +138,14 @@ describe("POST /api/profiles/:id/contracts — all five required", () => {
     expect(create.columnValues).toMatchObject({ deal_owner: { personsAndTeams: [{ id: 77, kind: "person" }] }, deal_value: 1500 });
     expect(calls.find((c) => c.op === "columns")).toEqual({
       op: "columns", boardId: "B-PROF", itemId: "111",
-      values: { email__1: { email: "new@mail.com", text: "new@mail.com" }, text_mkrkrsgj: "123 Main St, Kansas City, MO 64105" },
+      values: { email__1: { email: "new@mail.com", text: "new@mail.com" }, physical_address8__1: "123 Main St, Kansas City, MO 64105" },
     });
-    const p = db.prepare("SELECT email, address FROM profiles WHERE local_id = 'p1'").get();
-    expect(p).toEqual({ email: "new@mail.com", address: "123 Main St, Kansas City, MO 64105" });
+    const p = db.prepare("SELECT email, json_extract(raw_column_values, '$.mailing_address') AS mailing FROM profiles WHERE local_id = 'p1'").get();
+    expect(p).toEqual({ email: "new@mail.com", mailing: "123 Main St, Kansas City, MO 64105" });
   });
 
   it("doesn't touch the profile when the contact is unchanged", async () => {
-    db.prepare("UPDATE profiles SET address = '123 Main St, Kansas City, MO 64105', email = 'new@mail.com'").run();
+    db.prepare("UPDATE profiles SET raw_column_values = json_set(raw_column_values, '$.mailing_address', '123 Main St, Kansas City, MO 64105'), email = 'new@mail.com'").run();
     await call("POST", "/api/profiles/p1/contracts", { ...complete, email: "NEW@mail.com" });
     expect(calls.filter((c) => c.op === "columns")).toEqual([]);
   });
@@ -160,9 +161,40 @@ describe("PATCH /api/contracts/:id/fees — M25 Edit contract", () => {
   it("fixes the client's address on the profile only", async () => {
     const r = await call("PATCH", "/api/contracts/c1/fees", { address: "1 Oak Ave", from: { address: "" } });
     expect(r.status).toBe(200);
-    expect(calls).toEqual([{ op: "columns", boardId: "B-PROF", itemId: "111", values: { text_mkrkrsgj: "1 Oak Ave" } }]);
+    expect(calls).toEqual([{ op: "columns", boardId: "B-PROF", itemId: "111", values: { physical_address8__1: "1 Oak Ave" } }]);
     // P14 reads the profile's copy, so "Missing: Address" clears before the next sync.
-    expect(db.prepare("SELECT address FROM profiles WHERE local_id = 'p1'").get()).toEqual({ address: "1 Oak Ave" });
+    expect(db.prepare("SELECT json_extract(raw_column_values, '$.mailing_address') AS m FROM profiles WHERE local_id = 'p1'").get()).toEqual({ m: "1 Oak Ave" });
+  });
+
+  it("an address only on Physical: the stale check compares what the screen showed, then Mailing is written", async () => {
+    db.prepare("UPDATE profiles SET address = '5 Elm St' WHERE local_id = 'p1'").run();
+    const r = await call("PATCH", "/api/contracts/c1/fees", { address: "1 Oak Ave", from: { address: "5 Elm St" } });
+    expect(r.status).toBe(200);
+    expect(calls).toEqual([{ op: "columns", boardId: "B-PROF", itemId: "111", values: { physical_address8__1: "1 Oak Ave" } }]);
+  });
+
+  it("Payment Method: a real label, written as Monday spells it", async () => {
+    const r = await call("PATCH", "/api/contracts/c1/fees", { paymentMethod: "debit card" });
+    expect(r.status).toBe(200);
+    expect(calls).toEqual([{ op: "columns", boardId: "B-FK", itemId: "555", values: { dropdown_mm7v5eeb: { labels: ["DEBIT Card"] } } }]);
+    expect(db.prepare("SELECT json_extract(raw_column_values, '$.payment_method.labels[0]') AS m FROM contracts WHERE local_id = 'c1'").get()).toEqual({ m: "DEBIT Card" });
+    const bad = await call("PATCH", "/api/contracts/c1/fees", { paymentMethod: "Bitcoin" });
+    expect(bad.status).toBe(400);
+  });
+
+  it("Send for signature (onSend): saves everything typed; nothing new is fine", async () => {
+    const r = await call("PATCH", "/api/contracts/c1/fees", {
+      onSend: true, fees: { af: 2000 }, paymentMethod: "Cash", email: "typed@mail.com", address: "7 New Rd",
+    });
+    expect(r.status).toBe(200);
+    expect(calls).toEqual([
+      { op: "columns", boardId: "B-PROF", itemId: "111", values: { email__1: { email: "typed@mail.com", text: "typed@mail.com" }, physical_address8__1: "7 New Rd" } },
+      { op: "columns", boardId: "B-FK", itemId: "555", values: { deal_value: "2000", dropdown_mm7v5eeb: { labels: ["Cash"] } } },
+    ]);
+    calls.length = 0;
+    const again = await call("PATCH", "/api/contracts/c1/fees", { onSend: true, fees: { af: 2000 }, paymentMethod: "Cash", email: "typed@mail.com", address: "7 New Rd" });
+    expect(again.status).toBe(200);
+    expect(calls).toEqual([]);
   });
 
   it("fees and attorney go in one Fee K write", async () => {
