@@ -39,6 +39,10 @@ updated: 2026-11-05
 
 Generating also makes you the Fee K's **Assistant** if it has none.
 
+### Bond contracts
+
+A bond contract's PDF ends with the bond document list, so the client gets the contract and the list of what to send in one file. A contract counts as a bond contract when its template, its case type or its motion says "bond". The list is the file *BOND.pdf* in SharePoint, *Fee Contracts / DOCLISTS*. To change the list, replace that file and keep the name *BOND.pdf*. The **Word** download doesn't include the list.
+
 ### Habeas: pro hac vice motion
 
 When the attorney has to file a pro hac vice motion (Rekha sets the fee with the attorney):

@@ -398,6 +398,19 @@ export async function listContractTemplates(): Promise<{ driveId: string; items:
   return { driveId: resolved.driveId, items };
 }
 
+/**
+ * The bond document list, added after the last page of every bond contract
+ * (M22). Staff keep it current in SharePoint; it's read fresh for each
+ * contract, so a new version takes effect right away.
+ */
+export const BOND_DOC_LIST =
+  "https://sharmacrawford.sharepoint.com/sites/SCALDocs/Shared Documents/Fee Contracts/DOCLISTS/BOND.pdf";
+
+export async function downloadBondDocList(): Promise<Blob> {
+  const { driveId, item } = await resolveFileLink(BOND_DOC_LIST);
+  return downloadDriveFile(driveId, item.id);
+}
+
 // ---- Fee sheet ----------------------------------------------------------------
 
 /** Where the firm's fee sheet lives (lib/fee-sheet.ts). */

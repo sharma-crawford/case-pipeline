@@ -15,6 +15,13 @@ export interface ChangelogEntry {
 export const CHANGELOG: ChangelogEntry[] = [
   {
     date: "2026-11-05",
+    title: "Bond contracts include the bond document list",
+    items: [
+      "The PDF of a bond contract now ends with the bond document list (BOND.pdf in SharePoint, Fee Contracts → DOCLISTS), so the client gets both in one file.",
+    ],
+  },
+  {
+    date: "2026-11-05",
     title: "Contracts use the Mailing Address, and sending saves what you typed",
     items: [
       "The Generate contract and Edit contract screens now show the client's Mailing Address (the one the Fee K shows on Monday), not the Physical Address.",

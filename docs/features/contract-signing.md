@@ -143,6 +143,11 @@ add a contract.
   (`letterAddress`): cities typed with no comma, a suffix glued to the city,
   a unit before the city, "KCMO", the state from the zip when missing,
   all-lowercase lines capitalised; one it can't split stays whole.
+- Bond contracts (2026-11-05, `lib/contract-attachments.ts`): when the
+  template name, a picked Fee K Type or the motion says "bond", the PDF gets
+  SharePoint *Fee Contracts/DOCLISTS/BOND.pdf* appended (pdf-lib, in the
+  browser, read fresh each time). If the file can't be read the preview fails
+  with an error instead of going out without it. The .docx is not changed.
 - Everything happens in the browser: the template is filled there, and the
   PDF is made by the user's Microsoft 365 (`/me/drive/…/content?format=pdf`,
   a temporary file in their OneDrive folder "Case Pipeline (temporary)",

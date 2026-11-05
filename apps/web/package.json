@@ -20,6 +20,7 @@
     "dompurify": "^3.4.16",
     "lucide-react": "^1.34.0",
     "marked": "^15.0.12",
+    "pdf-lib": "^1.17.1",
     "pizzip": "^3.3.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
