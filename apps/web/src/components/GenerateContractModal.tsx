@@ -15,6 +15,8 @@
 // downloaded or — when the server has Zapier set up — sent for signature.
 // Sending only happens from the preview and sends that exact PDF, so what staff
 // looked at is what the client gets. Word downloads the filled .docx to edit.
+// A bond contract's PDF ends with the bond document list (BOND.pdf in
+// SharePoint, lib/contract-attachments.ts); the .docx doesn't.
 // Nothing is written to Monday until Send; the generation is audited
 // (template + fees). Send hands the PDF to Adobe Sign — attorney first, then
 // the client — and the API moves the stage, leaves a note and follows the
@@ -48,7 +50,7 @@ import {
 import type { PendingContract, ScheduledEsign } from "../api";
 import { useAuth } from "../auth/useAuth";
 import {
-  convertDocxToPdf, downloadDriveFile, getGraphToken, listContractTemplates,
+  convertDocxToPdf, downloadBondDocList, downloadDriveFile, getGraphToken, listContractTemplates,
   CONTRACT_TEMPLATES_FOLDER, GraphConsentRequiredError, type DriveItem,
 } from "../sharepoint/graph";
 import {
@@ -56,6 +58,7 @@ import {
   proHacViceFeeOf,
   type ContractInput, type ContractPerson, type FeeKTypeText, type TemplateCheck,
 } from "../lib/contract-fill";
+import { appendPdf, contractInvolvesBond } from "../lib/contract-attachments";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./ui/dialog";
 import { FeeSheetPicker } from "./FeeSheetPicker";
 import { ClientCaseModal } from "./ClientCaseModal";
@@ -507,7 +510,16 @@ export function GenerateContractModal({ contract: c, onClose, onSent }: Props) {
         void logContractGenerated(c.localId, { template: picked.name, format: "docx", attorneyFee: afOf(input), filingFee: input.filingFee });
         return;
       }
-      showPreview({ pdf: await convertDocxToPdf(docx, `${name}.docx`), name });
+      let pdf = await convertDocxToPdf(docx, `${name}.docx`);
+      // A bond contract ends with the bond document list (lib/contract-attachments.ts).
+      if (contractInvolvesBond(picked.name, input)) {
+        const list = await downloadBondDocList().catch((e: unknown) => {
+          if (e instanceof GraphConsentRequiredError) throw e;
+          throw new Error(`Could not add the bond document list (Fee Contracts → DOCLISTS → BOND.pdf): ${e instanceof Error ? e.message : e}`);
+        });
+        pdf = await appendPdf(pdf, list);
+      }
+      showPreview({ pdf, name });
     } catch (e) {
       if (e instanceof GraphConsentRequiredError) setNeedsConsent(true);
       else setError(e instanceof Error ? e.message : "Could not generate the contract");
