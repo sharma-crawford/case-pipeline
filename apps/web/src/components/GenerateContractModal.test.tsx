@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   scheduling: false,
   scheduled: null as null | Record<string, unknown>,
   cancel: vi.fn(),
+  update: vi.fn(),
 }));
 
 vi.mock("../api", () => ({
@@ -41,6 +42,8 @@ vi.mock("../api", () => ({
   }),
   logContractGenerated: mocks.log,
   sendContractForSignature: mocks.send,
+  updateContract: mocks.update,
+  FEE_K_PAYMENT_METHODS: ["CREDIT Card - Surcharge Applies", "DEBIT Card", "Cash", "SPLIT PAYMENTS"],
 }));
 vi.mock("./ClientCaseModal", () => ({
   ClientCaseModal: ({ profileLocalId, behind, onClose }: { profileLocalId: string; behind: string; onClose: () => void }) => (
@@ -84,6 +87,7 @@ beforeEach(() => {
   mocks.convert.mockReset().mockResolvedValue(pdf);
   mocks.send.mockReset().mockResolvedValue({ id: 1, stage: "Atty Reviewing", warning: null });
   mocks.log.mockReset();
+  mocks.update.mockReset().mockResolvedValue({ localId: "c1", fees: {}, pending: false });
   mocks.scheduling = false;
   mocks.scheduled = null;
   mocks.cancel.mockReset().mockResolvedValue(undefined);
@@ -120,6 +124,10 @@ describe("M22 preview", () => {
     // The standard name goes with it: Adobe's document and the signed copy carry it.
     expect(mocks.send).toHaveBeenCalledWith("c1", pdf, { attorneyEmail: "jane@firm.com", clientEmail: "ana@mail.com", documentName: "10-15-26 - Court Contract - A. LOPEZ", schedule: false });
     expect(onSent).toHaveBeenCalled();
+    // What was typed is saved to Monday on send (e-mail + address on the profile, AF + payment method on the Fee K).
+    expect(mocks.update).toHaveBeenCalledWith("c1", {
+      onSend: true, fees: { af: 5000 }, email: "ana@mail.com", address: "1 Main St, Kansas City, MO 64105",
+    }, {});
     // Scheduling is off on this server: no button for it.
     expect(button("Send on scheduled date")).toBeUndefined();
   });
@@ -403,5 +411,38 @@ describe("M22 attorney is picked, and brings their e-mail", () => {
     expect(email.value).toBe("lucy@firm.com");
     await act(async () => { choose(email, "jane@firm.com"); });
     expect(name.value).toBe("Jane Atty");
+  });
+});
+
+describe("M22 Send for signature saves to Monday", () => {
+  const open = async (c: PendingContract) => {
+    const host = document.body.appendChild(document.createElement("div"));
+    await act(async () => { createRoot(host).render(<GenerateContractModal contract={c} onClose={() => {}} onSent={() => {}} />); });
+    await flush();
+  };
+  const preview = async () => {
+    await act(async () => { button("Preview PDF")!.click(); });
+    await flush();
+  };
+  const sendWith = async (c: PendingContract) => { await open(c); await preview(); };
+
+  it("the payment method starts from Monday's and goes with the send", async () => {
+    await open({ ...contract, paymentMethod: "debit card" } as unknown as PendingContract);
+    const select = document.getElementById("m22-pay-method") as HTMLSelectElement;
+    expect(select.value).toBe("DEBIT Card");
+    await act(async () => { select.value = "Cash"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    await preview();
+    await act(async () => { button("Send for signature")!.click(); });
+    await flush();
+    expect(mocks.update.mock.calls[0]![1]).toMatchObject({ onSend: true, paymentMethod: "Cash" });
+  });
+
+  it("a failed save doesn't undo the send; it says to fix it with Edit contract", async () => {
+    mocks.update.mockRejectedValue(new Error("Monday did not answer"));
+    await sendWith(contract);
+    await act(async () => { button("Send for signature")!.click(); });
+    await flush();
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain("NOT saved to Monday");
   });
 });

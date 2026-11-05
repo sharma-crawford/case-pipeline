@@ -222,6 +222,36 @@ describe("payment links after an app-sent contract is signed", () => {
   });
 });
 
+describe("next hearing / interview from Calendaring (M21 reference date)", () => {
+  function insertCal(db: DatabaseInstance, id: string, cv: Record<string, unknown>, deleted = false) {
+    db.prepare(`
+      INSERT INTO board_items (batch_id, local_id, board_key, name, profile_local_id, column_values, deleted_at)
+      VALUES (1, ?, 'calendaring', ?, 'p1', ?, ?)
+    `).run(id, `Cal ${id}`, JSON.stringify(cv), deleted ? "2026-09-01" : null);
+  }
+
+  test("first hearing and first interview on or after today", () => {
+    const db = freshDb();
+    insertFeeK(db, { localId: "k" });
+    insertCal(db, "past", { type: { label: "Master" }, hearing_date_calendaring: { date: "2026-09-01" } });
+    insertCal(db, "later", { type: { label: "Trial" }, hearing_date_calendaring: { date: "2027-02-01" } });
+    insertCal(db, "next", { type: { label: "Master" }, hearing_date_calendaring: { date: "2026-10-15", time: "09:00:00" } });
+    insertCal(db, "gone", { type: { label: "Master" }, hearing_date_calendaring: { date: "2026-10-01" } }, true);
+    insertCal(db, "deadline", { type: { label: "Court Deadline" }, hearing_date_calendaring: { date: "2026-10-02" } });
+    insertCal(db, "iv", { uscis_notice_type: { labels: ["INTERVIEW NOTICE"] }, interview_date: { date: "2026-11-20" } });
+    insertCal(db, "bio", { uscis_notice_type: { labels: ["BIOMETRICS"] }, interview_date: { date: "2026-10-05" } });
+    expect(byId(db).k).toMatchObject({ nextHearing: "2026-10-15", nextInterview: "2026-11-20" });
+    db.close();
+  });
+
+  test("none calendared → null", () => {
+    const db = freshDb();
+    insertFeeK(db, { localId: "k" });
+    expect(byId(db).k).toMatchObject({ nextHearing: null, nextInterview: null });
+    db.close();
+  });
+});
+
 describe("getPendingContracts with the roster", () => {
   test("attorneys by roster name; Monday's spelling kept for M25", () => {
     const db = freshDb();

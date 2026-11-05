@@ -14,6 +14,23 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    date: "2026-11-05",
+    title: "Contracts use the Mailing Address, and sending saves what you typed",
+    items: [
+      "The Generate contract and Edit contract screens now show the client's Mailing Address (the one the Fee K shows on Monday), not the Physical Address.",
+      "New: pick How the client pays next to the signers.",
+      "When you press Send for signature, the e-mail, address, fees and payment method on the screen are saved to Monday, replacing what was there.",
+    ],
+  },
+  {
+    date: "2026-11-05",
+    title: "Hearing and interview payment links show the date",
+    items: [
+      "Payment links for a hearing or an interview now carry its date in the LawPay reference, so the receipt says which hearing or interview was paid.",
+      "The date starts from the client's next hearing or interview on Calendaring; you can change it in the Payment links window.",
+    ],
+  },
+  {
     date: "2026-11-03",
     title: "Paid Master hearings, litigation and bonds go to the right place",
     items: [

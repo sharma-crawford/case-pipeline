@@ -65,6 +65,13 @@ describe("feeKIdFromReference", () => {
     expect(feeKIdFromReference(`ANA LOPEZ I-212 ${code}`)).toBe(String(id));
     expect(feeKIdFromReference(parseReference(`ANA LOPEZ I-212 ${code} - AF 4120`)!.description)).toBe(String(id));
   });
+  it("still reads it with a hearing date before the code (and a split part)", () => {
+    const id = 18323456789;
+    const code = `K${id.toString(36).toUpperCase()}`;
+    const ref = parseReference(`ANA LOPEZ MASTER (C) HEARING 11/20/2026 ${code} - AF 1/2 400`)!;
+    expect(ref).toMatchObject({ fee: "AF", amount: 400, part: { n: 1, of: 2 } });
+    expect(feeKIdFromReference(ref.description)).toBe(String(id));
+  });
   it("no code → null (a hand-made reference, or a K-word that isn't at the end)", () => {
     expect(feeKIdFromReference("NORA TEST FOR ISAAC TEST ADMIN FEE")).toBeNull();
     expect(feeKIdFromReference("KIM LEE I-130")).toBeNull();

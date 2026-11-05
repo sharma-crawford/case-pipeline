@@ -23,7 +23,7 @@ import { withTokenFallback } from "../write-auth.js";
 import type { WriteTokenOptions } from "../write-token.js";
 import { enqueueWrite } from "../write-queue/processor.js";
 import { auditFromReq } from "../audit/log.js";
-import { getBoardColumnsFor } from "@case-pipeline/query";
+import { getBoardColumnsFor, profileMailingSql } from "@case-pipeline/query";
 import { fetchItem, resolveAllColumns, fetchBoardStructure } from "@case-pipeline/monday";
 import type { CreateTimelineItemInput } from "@case-pipeline/monday";
 import { loadConfig } from "@case-pipeline/config";
@@ -365,7 +365,7 @@ export function registerProfileWriteRoutes(app: Express, deps: ProfileWriteDeps)
     }
 
     const profile = db
-      .prepare("SELECT monday_item_id, name, email, address FROM profiles WHERE local_id = ?")
+      .prepare(`SELECT monday_item_id, name, email, ${profileMailingSql("profiles")} AS address FROM profiles WHERE local_id = ?`)
       .get(localId) as { monday_item_id: string | null; name: string; email: string | null; address: string | null } | null;
     if (!profile) {
       res.status(404).json({ error: "Profile not found" });

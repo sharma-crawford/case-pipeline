@@ -134,10 +134,12 @@ add a contract.
   Settings → Documents names them (Monday's "Rekha@Sharma- com" → Rekha
   Sharma-Crawford), with the roster e-mail; the Fee K's attorney is
   pre-selected through the roster's name matcher, and picking the letter's
-  signer sets Adobe's "Attorney signs first" e-mail (and back). The address (2026-10-22) is the profile's Address, else its
-  Mailing address, else the Fee K's own copy (P14's "missing" flag uses the
-  same order; a third of the Fee Ks since September had only a Mailing
-  address). It is tidied and split by `documents/us-address.ts`
+  signer sets Adobe's "Attorney signs first" e-mail (and back). The address
+  (2026-11-05, `contractAddressSql`) is the profile's **Mailing Address**,
+  else its Physical Address, else the Fee K's own copy — Mailing first because
+  the Fee K's Address mirror shows Mailing (Physical-first, 2026-10-22, showed
+  a different address on 18 of 45 pending Fee Ks). P14's "missing" flag and
+  M25 use the same order, and the app writes Mailing. It is tidied and split by `documents/us-address.ts`
   (`letterAddress`): cities typed with no comma, a suffix glued to the city,
   a unit before the city, "KCMO", the state from the zip when missing,
   all-lowercase lines capitalised; one it can't split stays whole.

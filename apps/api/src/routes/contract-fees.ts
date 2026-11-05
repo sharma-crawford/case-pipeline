@@ -31,7 +31,7 @@ import { withTokenFallback } from "../write-auth.js";
 import type { WriteTokenOptions } from "../write-token.js";
 import { enqueueWrite } from "../write-queue/processor.js";
 import { auditFromReq } from "../audit/log.js";
-import { caseTypeColumn, feeKCaseTypeSql, findCaseTypeOption, getBoardColumnsFor } from "@case-pipeline/query";
+import { caseTypeColumn, contractAddressSql, feeKCaseTypeSql, findCaseTypeOption, getBoardColumnsFor, profileMailingSql } from "@case-pipeline/query";
 import { usersDb } from "../db/users-db.js";
 import {
   FEE_K_ATTORNEY, applyProfileContactLocally, cleanContact, contractAttorneys, makeMondayUserResolver,
@@ -50,6 +50,17 @@ export const FEE_COLUMNS: Record<FeeKey, { id: string; label: string }> = {
   pf: { id: "numbers5__1", label: "PF" },
 };
 const FEE_KEYS = Object.keys(FEE_COLUMNS) as FeeKey[];
+
+/** Fee Ks "Payment Method" dropdown — config/boards.yaml fee_ks.payment_method. */
+export const FEE_K_PAYMENT_METHOD = { id: "dropdown_mm7v5eeb", key: "payment_method" } as const;
+
+/** The Payment Method label as Monday spells it, or null when it isn't one of the column's labels. */
+export function paymentMethodOption(schema: BoardColumns | null, wanted: string): string | null {
+  if (!wanted) return null;
+  const col = schema?.columns.find((c) => c.columnId === FEE_K_PAYMENT_METHOD.id);
+  const labels = (col?.options ?? []).map((o) => (o as { label?: unknown }).label).filter((l): l is string => typeof l === "string");
+  return labels.find((l) => l.toLowerCase() === wanted.toLowerCase()) ?? null;
+}
 
 /** The most a fee can be — guards against a typo with extra zeros. */
 const MAX_FEE = 1_000_000;
@@ -226,7 +237,7 @@ export function registerContractFeesRoutes(app: Express, deps: ContractFeesDeps)
     const profileLocalId = typeof req.query.profile === "string" ? req.query.profile : "";
     const p = profileLocalId
       ? (db.prepare(
-          `SELECT email, address, json_extract(raw_column_values, '$.attorney.label') AS attorney
+          `SELECT email, ${contractAddressSql("profiles")} AS address, json_extract(raw_column_values, '$.attorney.label') AS attorney
              FROM profiles WHERE local_id = ?`,
         ).get(profileLocalId) as { email: string | null; address: string | null; attorney: string | null } | undefined)
       : undefined;
@@ -254,17 +265,23 @@ export function registerContractFeesRoutes(app: Express, deps: ContractFeesDeps)
                 json_extract(c.raw_column_values, '$.pf') AS pf,
                 ${feeKCaseTypeSql()} AS contract_for,
                 json_extract(c.raw_column_values, '$.attorney.label') AS attorney,
-                p.local_id AS profile_local_id, p.monday_item_id AS profile_monday_id, p.email, p.address
+                p.local_id AS profile_local_id, p.monday_item_id AS profile_monday_id, p.email,
+                -- address = Mailing (what gets written); shown_address = what the screens showed (stale check).
+                ${profileMailingSql("p")} AS address,
+                ${contractAddressSql("p")} AS shown_address,
+                json_extract(c.raw_column_values, '$.payment_method.labels[0]') AS payment_method
            FROM contracts c LEFT JOIN profiles p ON p.local_id = c.profile_local_id
           WHERE c.local_id = ? AND c.deleted_at IS NULL`,
       )
       .get(localId) as (ContractFeesRow & {
         attorney: string | null; profile_local_id: string | null; profile_monday_id: string | null;
-        email: string | null; address: string | null;
+        email: string | null; address: string | null; shown_address: string | null; payment_method: string | null;
       }) | undefined;
     const body = (req.body ?? {}) as {
       fees?: unknown; caseType?: unknown; newCaseType?: unknown; from?: unknown;
-      attorney?: unknown; email?: unknown; address?: unknown;
+      attorney?: unknown; email?: unknown; address?: unknown; paymentMethod?: unknown;
+      /** Sent by M22 Send for signature: saves what was typed; "nothing changed" is fine. */
+      onSend?: unknown;
     };
     const seen = body.from && typeof body.from === "object" ? (body.from as Record<string, unknown>) : {};
     const planned = planContractFees(body, item, getBoardColumnsFor(db, BOARD_KEY), { allowNoChange: true });
@@ -309,7 +326,8 @@ export function registerContractFeesRoutes(app: Express, deps: ContractFeesDeps)
         return;
       }
       for (const key of contactPlan.changed) {
-        if (Object.hasOwn(seen, key) && String(seen[key] ?? "").trim() !== (row[key] ?? "").trim()) {
+        const shown = key === "address" ? row.shown_address : row.email;
+        if (Object.hasOwn(seen, key) && String(seen[key] ?? "").trim() !== (shown ?? "").trim()) {
           res.status(409).json({ error: `The client's ${key === "email" ? "e-mail" : "address"} changed since you loaded the page`, current: { email: row.email, address: row.address } });
           return;
         }
@@ -337,7 +355,27 @@ export function registerContractFeesRoutes(app: Express, deps: ContractFeesDeps)
       values[FEE_K_ATTORNEY.id] = peopleValue(attorneyUserId) as never;
       (local as Record<string, unknown>)[FEE_K_ATTORNEY.key] = { label: attorney };
     }
+    // Payment Method (dropdown): a real label only, written when it differs.
+    let paymentMethodChanged = false;
+    if (body.paymentMethod !== undefined) {
+      const wanted = typeof body.paymentMethod === "string" ? body.paymentMethod.trim() : "";
+      const option = paymentMethodOption(getBoardColumnsFor(db, BOARD_KEY), wanted);
+      if (!option) {
+        res.status(400).json({ error: wanted ? `"${wanted}" is not a Payment Method on Monday` : "Pick how the client pays" });
+        return;
+      }
+      if (option.toLowerCase() !== (row.payment_method ?? "").trim().toLowerCase()) {
+        values[FEE_K_PAYMENT_METHOD.id] = { labels: [option] } as never;
+        (local as Record<string, unknown>)[FEE_K_PAYMENT_METHOD.key] = { labels: [option] };
+        paymentMethodChanged = true;
+      }
+    }
     if (Object.keys(values).length === 0 && contactPlan.changed.length === 0) {
+      // Send for signature (M22) saves what was typed every time; nothing new is fine there.
+      if (body.onSend === true) {
+        res.json({ data: { localId, fees: {}, pending: false } });
+        return;
+      }
       res.status(400).json({ error: "Nothing changed" });
       return;
     }
@@ -358,6 +396,8 @@ export function registerContractFeesRoutes(app: Express, deps: ContractFeesDeps)
           mondayItemId, boardKey: BOARD_KEY, from, to, ...(newLabel ? { newCaseType: true } : {}),
           ...(attorneyChanged ? { attorney: { from: currentAttorneys, to: attorney } } : {}),
           ...(contactPlan.changed.length ? { clientContactChanged: contactPlan.changed } : {}),
+          ...(paymentMethodChanged ? { paymentMethod: { from: row.payment_method, to: (local as Record<string, { labels: string[] }>)[FEE_K_PAYMENT_METHOD.key]!.labels[0] } } : {}),
+          ...(body.onSend === true ? { onSend: true } : {}),
           ...extra,
         },
       });
